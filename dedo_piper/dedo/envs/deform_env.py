@@ -99,6 +99,9 @@ class DeformEnv(gym.Env):
             print(f"Starting object ids: {self.object_ids}")
             print(f"Deformable ID: {res[1]}")
 
+        self.target_id = [ ] # self.rigid_ids as the target object if task is rigid pick
+
+
     @staticmethod
     def unscale_vel(act, unscaled):
         if unscaled:
@@ -132,7 +135,7 @@ class DeformEnv(gym.Env):
             file_path = os.path.join(parent, randfile)
         return file_path
 
-    def load_objects(self, sim, args, debug):
+    def load_objects(self, sim, args, debug):# load objects and load the floor
         scene_name = self.args.task.lower()
         if scene_name in ['hanggarment', 'bgarments', 'sewing','hangproccloth']:
            scene_name = 'hangcloth'  # same hanger for garments and cloths
@@ -230,7 +233,7 @@ class DeformEnv(gym.Env):
             pin_fixed(sim, deform_id,
                       DEFORM_INFO[deform_obj]['deform_fixed_anchor_vertex_ids'])
 
-        # Load rigid objects.
+        # Load rigid objects. add the target object to the scene if needed.
         rigid_ids = []
         for name, kwargs in SCENE_INFO[scene_name]['entities'].items():
             rgba_color = kwargs['rgbaColor'] if 'rgbaColor' in kwargs else None
@@ -259,6 +262,10 @@ class DeformEnv(gym.Env):
             self.deform_shape_sample_idx = np.random.choice(np.arange(
                 vertices.shape[0]), 20, replace=False)
             self.deform_init_shape = relative_dist[self.deform_shape_sample_idx]
+            
+        if scene_name == 'rigidpick':
+            self.target_id = rigid_ids
+            pass  # TODO: add code for rigid pick task
 
         return rigid_ids, deform_id, deform_obj, np.array(goal_poses)
 

@@ -252,12 +252,12 @@ SCENE_INFO = {
     },
     'rigidpick': {
         'entities': {
-            'urdf/borders.urdf': {
+            'ycb/015_peach/google_16k/08194_sparse_textured_ok.obj': {
                 'basePosition': [-1.5, 2.0, 0.5],
                 'baseOrientation': [0, 0, 0],
-                'globalScaling': 4.0,
+                'globalScaling': 4,
                 'mass': 0,
-                'useTexture': True,
+                'useTexture': False,
             },
         },
         'goal_pos': [[-2.5, 2.0, 0.5]]

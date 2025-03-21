@@ -28,7 +28,8 @@ from .deform_env import DeformEnv
 class RigidRobotEnv(DeformEnv):
     ORI_SIZE = 3 * 2  # EE 3D position + sin,cos for 3 Euler angles # original transform
     FING_DIST = 0.10  # default finger distance # TODO: check if this is correct?
-
+    distance_threshold = 0.05
+    reward_type = 'sparse'
     def __init__(self, args):
         super(RigidRobotEnv, self).__init__(args)
         # rewrite action space
@@ -62,6 +63,7 @@ class RigidRobotEnv(DeformEnv):
                                   robot_info['file_name'])
         if debug:
             print('Loading robot from', robot_path)
+
         self.robot = BulletManipulator(
             sim, robot_path, control_mode='velocity',
             ee_joint_name=robot_info['ee_joint_name'],
@@ -102,7 +104,7 @@ class RigidRobotEnv(DeformEnv):
         tgt_pos = RigidRobotEnv.unscale_pos(action[0, :3], unscaled)
         tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:]
         tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,
-                      'fing_dist': RigidRobotEnv.FING_DIST}
+                      'fing_dist': RigidRobotEnv.FING_DIST}#how to deal with finger distance
         if self.num_anchors > 1:  # dual-arm
             res = self.robot.get_ee_pos_ori_vel(left=True)
             left_ee_pos, left_ee_ori = res[0], res[1]
@@ -165,7 +167,7 @@ class RigidRobotEnv(DeformEnv):
         else:
             return super(RigidRobotEnv, self).get_reward()
 
-    def get_food_packing_reward(self):
+    def get_food_packing_reward(self): # TODO:DELETE THE FUNCTION
         _, vertex_positions = get_mesh_data(self.sim, self.deform_id)
         # rigid_ids[1] is the box, rigid_ids[2] is the can
         box_pos, _ = self.sim.getBasePositionAndOrientation(self.rigid_ids[1])
@@ -185,3 +187,27 @@ class RigidRobotEnv(DeformEnv):
         penalty_rwd = np.linalg.norm(current_shape - self.deform_init_shape)
         rwd = rwd + penalty_rwd
         return rwd
+    
+    def get_pick_reward(self):
+        # Compute distance between goal and the achieved goal.
+        achieved_goal = self.get_grip_obs()
+        goal = self.get_target_obs() # the target position or orientation get from the env
+        d = goal_distance(achieved_goal, goal)
+        if self.reward_type == 'sparse':
+            return -(d > self.distance_threshold).astype(np.float32)
+        else:
+            return -d
+        
+    def _is_success(self, achieved_goal, desired_goal):
+        d = goal_distance(achieved_goal, desired_goal)
+        return (d < self.distance_threshold).astype(np.float32)
+    
+    def get_target_obs(self):
+        target_pos = np.array(pybullet.getBasePositionAndOrientation(self.targetUid)[0]) # TODO:GET THE TARGET UID
+        return target_pos
+
+
+def goal_distance(goal_a, goal_b):
+    assert goal_a.shape == goal_b.shape
+    # np.linalg.norm指求范数，默认是l2范数
+    return np.linalg.norm(goal_a - goal_b, axis=-1)
