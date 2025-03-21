@@ -1,0 +1,1 @@
+REPOSITORY_PATH="/home/libo/project/simulator/piper_bullet/thirdparty/piper_ros"

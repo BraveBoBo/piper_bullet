@@ -25,15 +25,17 @@ from ..utils.task_info import DEFORM_INFO, ROBOT_INFO
 from .deform_env import DeformEnv
 
 
-class DeformRobotEnv(DeformEnv):
-    ORI_SIZE = 3 * 2  # 3D position + sin,cos for 3 Euler angles
+class RigidRobotEnv(DeformEnv):
+    ORI_SIZE = 3 * 2  # EE 3D position + sin,cos for 3 Euler angles # original transform
     FING_DIST = 0.10  # default finger distance # TODO: check if this is correct?
 
     def __init__(self, args):
-        super(DeformRobotEnv, self).__init__(args)
-        act_sz = 3
-        if self.food_packing:
-            act_sz += DeformRobotEnv.ORI_SIZE
+        super(RigidRobotEnv, self).__init__(args)
+        # rewrite action space
+        act_sz = 4 # position control +finger distance
+        if self.rigid_pick:
+            act_sz += RigidRobotEnv.ORI_SIZE # 3D position + sin,cos for 3 Euler angles+ee_finger_dist
+
         self.action_space = gym.spaces.Box(  # [-1, 1]
             -1.0 * np.ones(self.num_anchors * act_sz),
             np.ones(self.num_anchors * act_sz))#TODO: check if this is correct?
@@ -47,7 +49,7 @@ class DeformRobotEnv(DeformEnv):
         return act * DeformEnv.WORKSPACE_BOX_SIZE
 
     def load_objects(self, sim, args, debug):
-        res = super(DeformRobotEnv, self).load_objects(sim, args, debug)
+        res = super(RigidRobotEnv, self).load_objects(sim, args, debug)
         data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
         sim.setAdditionalSearchPath(data_path)
         if args.robot_name == 'piper':
@@ -97,19 +99,19 @@ class DeformRobotEnv(DeformEnv):
         # Note: action is in [-1,1], so we unscale pos (ori is sin,cos so ok).
         action = action.reshape(self.num_anchors, -1)
         ee_pos, ee_ori, _, _ = self.robot.get_ee_pos_ori_vel()
-        tgt_pos = DeformRobotEnv.unscale_pos(action[0, :3], unscaled)
+        tgt_pos = RigidRobotEnv.unscale_pos(action[0, :3], unscaled)
         tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:]
         tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,
-                      'fing_dist': DeformRobotEnv.FING_DIST}
+                      'fing_dist': RigidRobotEnv.FING_DIST}
         if self.num_anchors > 1:  # dual-arm
             res = self.robot.get_ee_pos_ori_vel(left=True)
             left_ee_pos, left_ee_ori = res[0], res[1]
-            left_tgt_pos = DeformRobotEnv.unscale_pos(action[1, :3], unscaled)
+            left_tgt_pos = RigidRobotEnv.unscale_pos(action[1, :3], unscaled)
             left_tgt_ee_ori = left_ee_ori if action.shape[-1] == 3 else \
                 action[1, 3:]
             tgt_kwargs.update({'left_ee_pos': left_tgt_pos,
                                'left_ee_ori': left_tgt_ee_ori,
-                               'left_fing_dist': DeformRobotEnv.FING_DIST})
+                               'left_fing_dist': RigidRobotEnv.FING_DIST})
         tgt_qpos = self.robot.ee_pos_to_qpos(**tgt_kwargs)
         n_slack = 1  # use > 1 if robot has trouble reaching the pose
         sub_i = 0
@@ -161,7 +163,7 @@ class DeformRobotEnv(DeformEnv):
         if self.food_packing:
             return self.get_food_packing_reward()
         else:
-            return super(DeformRobotEnv, self).get_reward()
+            return super(RigidRobotEnv, self).get_reward()
 
     def get_food_packing_reward(self):
         _, vertex_positions = get_mesh_data(self.sim, self.deform_id)
@@ -182,12 +184,4 @@ class DeformRobotEnv(DeformEnv):
         current_shape = relative_dist[self.deform_shape_sample_idx]
         penalty_rwd = np.linalg.norm(current_shape - self.deform_init_shape)
         rwd = rwd + penalty_rwd
-        return rwd
-    
-    def get_rigid_pick_reward(self):#XXX: check if this is correct?
-        """Reward for picking up the rigid object."""
-        rwd = 0
-        if self.rigid_ids[1] in self.sim.getContactPoints(
-                bodyA=self.rigid_ids[1], bodyB=self.robot.info.robot_id):
-            rwd = 1
         return rwd

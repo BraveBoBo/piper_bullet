@@ -12,7 +12,7 @@ import pybullet
 import pybullet_utils.bullet_client as bclient
 
 
-from constant import URDF_PATH, PACKAGE_PATH, REPOSITORY_PATH
+from constant import  REPOSITORY_PATH
 
 class ManipulatorInfo:
     def __init__(self, robot_id, joint_ids, joint_names,

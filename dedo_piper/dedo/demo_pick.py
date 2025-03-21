@@ -33,13 +33,8 @@ from dedo.utils.bullet_manipulator import convert_all
 
 
 def play(env, num_episodes, args):
-    if args.task == 'ButtonProc':
-        deform_obj = 'cloth/button_cloth.obj'
-    elif args.task == 'HangProcCloth':
-        deform_obj = 'cloth/apron_0.obj'
-    elif args.task == 'FoodPacking':
-        deform_obj = 'food'
-    elif args.task =='RigidPick':
+
+    if args.task =='RigidPick':
         deform_obj = 'rigid'
     else:
         deform_obj = env.deform_obj
@@ -264,6 +259,6 @@ def main(args):
 
 if __name__ == "__main__":
     from debug import enable_remote_debug
-    enable_remote_debug(5678)
+    enable_remote_debug(5679)
     import debugpy; debugpy.breakpoint()
     main(get_args())

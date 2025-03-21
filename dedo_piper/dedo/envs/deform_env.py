@@ -57,7 +57,8 @@ class DeformEnv(gym.Env):
 
         # reset_bullet(args, self.sim, debug=args.debug)
         self.food_packing = self.args.env.startswith('FoodPacking')
-        self.num_anchors = 1 if self.food_packing else 2
+        self.rigid_pick = self.args.env.startswith('RigidPick')
+        self.num_anchors = 1 if self.food_packing or self.rigid_pick else 2
         res = self.load_objects(self.sim, self.args, debug=True)
         self.rigid_ids, self.deform_id, self.deform_obj, self.goal_pos = res
 
@@ -215,7 +216,7 @@ class DeformEnv(gym.Env):
         # Load deformable object.
         texture_path = args.deform_texture_file
         # Randomize textures for deformables (except YCB food objects).
-        if not self.food_packing:
+        if not self.food_packing and not self.rigid_pick:
             texture_path = os.path.join(
                 data_path, self.get_texture_path(args.deform_texture_file))
         deform_id = load_deform_object(
@@ -294,7 +295,7 @@ class DeformEnv(gym.Env):
            debug_mrks = self.debug_viz_true_loop()
 
         # Setup dynamic anchors.
-        if not self.food_packing:
+        if not self.food_packing and not self.rigid_pick:
             self.make_anchors()
 
         # Set up viz.

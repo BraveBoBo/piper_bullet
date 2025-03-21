@@ -65,6 +65,11 @@ TASK_INFO = {
         'ycb/015_peach/google_16k/08194_sparse_textured_ok.obj',
         'ycb/014_lemon/google_16k/08194_sparse_textured_ok.obj',
         'ycb/018_plum/google_16k/08194_sparse_textured_ok.obj',
+    ],#add the food packing task
+    'RigidPick': [
+        'ycb/015_peach/google_16k/08194_sparse_textured_ok.obj',
+        'ycb/014_lemon/google_16k/08194_sparse_textured_ok.obj',
+        'ycb/018_plum/google_16k/08194_sparse_textured_ok.obj',
     ],
 }
 TOTE_VARS_PER_VERSION = 36  # num. tote mesh variants per major mesh version
@@ -245,6 +250,19 @@ SCENE_INFO = {
         },
         'goal_pos': [[-2.5, 2.0, 0.5]],
     },
+    'rigidpick': {
+        'entities': {
+            'urdf/borders.urdf': {
+                'basePosition': [-1.5, 2.0, 0.5],
+                'baseOrientation': [0, 0, 0],
+                'globalScaling': 4.0,
+                'mass': 0,
+                'useTexture': True,
+            },
+        },
+        'goal_pos': [[-2.5, 2.0, 0.5]]
+    }
+
 }
 
 # Information about deformable objects.
