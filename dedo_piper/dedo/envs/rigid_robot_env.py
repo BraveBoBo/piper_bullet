@@ -43,6 +43,9 @@ class RigidRobotEnv(DeformEnv):
         if self.args.debug:
             print('Wrapped as DeformEnvRobot with act', self.action_space)
 
+        self.place_id = [ ] # self.rigid_ids as the target object if task is rigid pick
+        self.pick_up_id :int =None # self.deform_id as the target object if task is food picking
+
     @staticmethod
     def unscale_pos(act, unscaled):
         if unscaled:
@@ -51,6 +54,9 @@ class RigidRobotEnv(DeformEnv):
 
     def load_objects(self, sim, args, debug):
         res = super(RigidRobotEnv, self).load_objects(sim, args, debug)
+        self.place_id  = res[0]
+        self.pick_up_id  = res[1]
+
         data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
         sim.setAdditionalSearchPath(data_path)
         if args.robot_name == 'piper':
@@ -96,15 +102,58 @@ class RigidRobotEnv(DeformEnv):
             self.sim.createSoftBodyAnchor(
                 self.deform_id, preset_dynamic_anchor_vertices[i][0],
                 self.robot.info.robot_id, link_id)
+            
+    def step(self, action, unscaled=False):
+        if self.args.debug:
+            print('action', action)
+        if not unscaled:
+            assert self.action_space.contains(action)
+            assert ((np.abs(action) <= 1.0).all()), 'action must be in [-1, 1]'
+        action = action.reshape(self.num_anchors, -1)
 
+        # Step through physics simulation.
+        for sim_step in range(self.args.sim_steps_per_action):
+            self.do_action(action, unscaled)
+            self.sim.stepSimulation()
+
+        # Get next obs, reward, done.
+        next_obs, done = self.get_obs()
+        reward = self.get_reward()
+        if done:  # if terminating early use reward from current step for rest
+            reward *= (self.max_episode_len - self.stepnum)
+        done = (done or self.stepnum >= self.max_episode_len)
+
+        # Update episode info and call make_final_steps if needed.
+        if done:
+            # Compute final reward by releasing anchors to let the object fall.
+            info = self.make_final_steps()
+            last_rwd = self.get_reward() * DeformEnv.FINAL_REWARD_MULT
+            info['is_success'] = np.abs(last_rwd) < self.SUCESS_REWARD_TRESHOLD
+            reward += last_rwd
+            info['final_reward'] = reward
+            print(f'final_reward: {reward:.4f}')
+        else:
+            info = {}
+
+        self.episode_reward += reward  # update episode reward
+
+        if self.args.debug and self.stepnum % 10 == 0:
+            print(f'step {self.stepnum:d} reward {reward:0.4f}')
+            if done:
+                print(f'episode reward {self.episode_reward:0.4f}')
+            
+        self.stepnum += 1
+
+        return next_obs, reward, done, info
+    
     def do_action(self, action, unscaled=False):
-        # Note: action is in [-1,1], so we unscale pos (ori is sin,cos so ok).
+        # Note: action is in [-1,1], so we unscale pos (ori is sin,cos so ok).# TODO: check if this is correct?
         action = action.reshape(self.num_anchors, -1)
         ee_pos, ee_ori, _, _ = self.robot.get_ee_pos_ori_vel()
         tgt_pos = RigidRobotEnv.unscale_pos(action[0, :3], unscaled)
-        tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:]
-        tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,
-                      'fing_dist': RigidRobotEnv.FING_DIST}#how to deal with finger distance
+        tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:-1]
+        fing_dist = action[0, -1]
+        tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,'fing_dist': fing_dist}#how to deal with finger distance
         if self.num_anchors > 1:  # dual-arm
             res = self.robot.get_ee_pos_ori_vel(left=True)
             left_ee_pos, left_ee_ori = res[0], res[1]
@@ -127,7 +176,7 @@ class RigidRobotEnv(DeformEnv):
             sub_i += 1
             if sub_i >= n_slack:
                 diff = np.zeros_like(diff)  # set while loop to done
-
+    # XXX: This is a hack to make sure the robot is stable after moving.
     def make_final_steps(self):
         ee_pos, ee_ori, *_ = self.robot.get_ee_pos_ori_vel()
         final_action = np.hstack([ee_pos, ee_ori]).reshape(1, -1)
@@ -202,7 +251,7 @@ class RigidRobotEnv(DeformEnv):
         d = goal_distance(achieved_goal, desired_goal)
         return (d < self.distance_threshold).astype(np.float32)
     
-    def get_target_obs(self):
+    def get_target_obs(self): # pick the target position or orientation
         target_pos = np.array(pybullet.getBasePositionAndOrientation(self.targetUid)[0]) # TODO:GET THE TARGET UID
         return target_pos
 

@@ -30,18 +30,14 @@ import wandb
 import cv2
 
 from dedo.utils.bullet_manipulator import convert_all
+import pybullet
 
 
 def play(env, num_episodes, args):
-
+    assert hasattr(env, 'deform_obj') or args.task == 'RigidPick',"Need to set deform_obj for deformable object"
     if args.task =='RigidPick':
         deform_obj = 'rigid'
-    else:
-        deform_obj = env.deform_obj
 
-    assert deform_obj in preset_traj, \
-        f'deform_obj {deform_obj:s} not in presets {preset_traj.keys()}'
-    preset_wp = preset_traj[deform_obj]['waypoints']
     vidwriter = None
     if args.cam_resolution > 0 and args.logdir is not None:
         if not os.path.exists(args.logdir):
@@ -64,41 +60,13 @@ def play(env, num_episodes, args):
                              height=args.cam_resolution)
             if vidwriter is not None:
                 vidwriter.write(img[..., ::-1])
-        if args.debug:
-            viz_waypoints(env.sim, preset_wp['a'], (1, 0, 0, 1))
-            if 'b' in preset_wp:
-                viz_waypoints(env.sim, preset_wp['b'], (1, 0, 0, 0.5))
+
         # Need to step to get low-dim state from info.
         step = 0
         ctrl_freq = args.sim_freq / args.sim_steps_per_action
         robot = None
         if hasattr(env, 'robot'):
             robot = env.robot
-        pos_traj, vel_traj = build_traj(
-            env, preset_wp, 'a', anchor_idx=0, ctrl_freq=ctrl_freq, robot=robot)
-        pos_traj_b, traj_b = None, None
-        if 'b' in preset_wp:
-            pos_traj_b, traj_b = build_traj(env, preset_wp, 'b', anchor_idx=1,
-                                            ctrl_freq=ctrl_freq, robot=robot)
-        if robot is None:  # velocity control for anchors
-            traj = vel_traj
-            if traj_b is not None:
-                traj = merge_traj(traj, traj_b)
-            last_action = np.zeros_like(traj[0])
-        else:  # position control for robot
-            traj = pos_traj
-            if pos_traj_b is not None:
-                traj = merge_traj(pos_traj, pos_traj_b)
-            last_action = traj[-1]
-        traj_ori = preset_wp.get('a_theta', None)
-        if traj_ori is not None:
-            traj_ori = convert_all(np.array(traj_ori), 'theta_to_sin_cos')
-            n_repeats = traj.shape[0] // len(traj_ori)
-            traj_ori = np.repeat(traj_ori, n_repeats, axis=0)
-            print('traj_ori', traj_ori.shape, traj_ori)
-            assert (traj_ori.shape[0] == traj.shape[0])
-            assert (traj_ori.shape[1] == 6)  # Euler sin,sin,sin,cos,cos,cos
-            traj = np.hstack([traj, traj_ori])
 
         gif_frames = []
         rwds = []
@@ -106,55 +74,91 @@ def play(env, num_episodes, args):
 
         if args.pcd:
             pcd_fig = plt.figure(figsize=(10,5))
+
+
         while True:
             assert (not isinstance(env.action_space, gym.spaces.Discrete))
-
-            act = traj[step] if step < len(traj) else last_action
-
+            acts = get_action(env, env.pick_up_id)
+            act = acts[0] if isinstance(acts, list) else acts
+            
             next_obs, rwd, done, info = env.step(act, unscaled=True)
             rwds.append(rwd)
 
-            if done and vidwriter is not None:  # Record the internal steps after anchor drop
-                for ob in info['final_obs'][1:]:
-                    vidwriter.write(np.uint8(ob[..., ::-1] * 255))
-            if args.cam_resolution > 0:
-                img = env.render(mode='rgb_array', width=args.cam_resolution,
-                                 height=args.cam_resolution)
-                if vidwriter is not None:
-                    vidwriter.write(img[..., ::-1])
+        #     if done and vidwriter is not None:  # Record the internal steps after anchor drop
+        #         for ob in info['final_obs'][1:]:
+        #             vidwriter.write(np.uint8(ob[..., ::-1] * 255))
+        #     if args.cam_resolution > 0:
+        #         img = env.render(mode='rgb_array', width=args.cam_resolution,
+        #                          height=args.cam_resolution)
+        #         if vidwriter is not None:
+        #             vidwriter.write(img[..., ::-1])
 
-                if args.pcd:
-                    # Grab additional obs from the environment
-                    pcd_obs = env.get_pcd_obs()
-                    img, pcd, ids = pcd_obs.values()
+        #         if args.pcd:
+        #             # Grab additional obs from the environment
+        #             pcd_obs = env.get_pcd_obs()
+        #             img, pcd, ids = pcd_obs.values()
 
-                    os.makedirs(f"{args.logdir}/pcd", exist_ok=True) # tmpfolder
-                    save_path = f'{args.logdir}/pcd/{step:06d}.png'
-                    visualize_data(img, pcd, ids, fig=pcd_fig, 
-                                        save_path=save_path)
+        #             os.makedirs(f"{args.logdir}/pcd", exist_ok=True) # tmpfolder
+        #             save_path = f'{args.logdir}/pcd/{step:06d}.png'
+        #             visualize_data(img, pcd, ids, fig=pcd_fig, 
+        #                                 save_path=save_path)
 
 
-            # gif_frames.append(obs)
-            if done:
-                break
+        #     # gif_frames.append(obs)
+        #     if done:
+        #         break
 
-            # if step > len(traj) + 50: break;
-            obs = next_obs
+        #     # if step > len(traj) + 50: break;
+        #     obs = next_obs
 
             step += 1
 
-        print(f'episode reward: {env.episode_reward:.4f}')
-        print('traj_length:', len(traj))
-        if args.use_wandb:
-            mean_rwd = np.sum(rwds)
-            for i in range(31):
-                wandb.log({'rollout/ep_rew_mean': mean_rwd, 'Step': i}, step=i)
-        if vidwriter is not None:
-            vidwriter.release()
+        # print(f'episode reward: {env.episode_reward:.4f}')
+        # print('traj_length:', len(traj))
+        # if args.use_wandb:
+        #     mean_rwd = np.sum(rwds)
+        #     for i in range(31):
+        #         wandb.log({'rollout/ep_rew_mean': mean_rwd, 'Step': i}, step=i)
+        # if vidwriter is not None:
+        #     vidwriter.release()
 
-        if args.pcd:
-            render_video(f'{args.logdir}/pcd', 
-                                f'{args.logdir}/pcd_preset_test.mp4')            
+        # if args.pcd:
+        #     render_video(f'{args.logdir}/pcd', 
+        #                         f'{args.logdir}/pcd_preset_test.mp4')            
+
+def get_action(env, object_id):
+    """
+    根据 object_id 获取目标的状态（位置、旋转）并生成动作向量。
+
+    参数:
+        env: 环境实例（当前未使用，可扩展）。
+        object_id: 单个 int 类型 id 或 int 类型 id 的列表。
+
+    返回:
+        如果 object_id 为 int,返回一个 numpy 数组；
+        如果 object_id 为列表,返回一个动作向量列表
+    """
+    def compute_action(oid):
+        pos, orn = pybullet.getBasePositionAndOrientation(oid)
+        pos = np.array(pos)[np.newaxis]
+        orn = np.array(pybullet.getEulerFromQuaternion(orn))[np.newaxis]
+        orn = convert_all(orn, 'theta_to_sin_cos')
+        return pos, orn
+    finger_dist = np.array([[0.7]])
+
+    if isinstance(object_id, int):
+        pos, orn = compute_action(object_id)
+        return np.concatenate([pos, orn, finger_dist], axis=-1)
+    elif isinstance(object_id, list):
+        # 计算每个 object_id 的状态
+        results = [compute_action(oid) for oid in object_id]
+        # 对每个状态进行拼接
+        return [np.concatenate([pos, orn, finger_dist], axis=-1) for pos, orn in results]
+    else:
+        raise ValueError("object_id 必须为 int 或 int 类型的列表。")
+
+
+
 
 
 def viz_waypoints(sim, waypoints, rgba):

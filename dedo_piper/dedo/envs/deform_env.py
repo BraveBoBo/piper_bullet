@@ -69,7 +69,7 @@ class DeformEnv(gym.Env):
         # Define sizes of observation and action spaces.
         self.gripper_lims = np.tile(np.concatenate(#TODO:CHECK THIS
             [DeformEnv.WORKSPACE_BOX_SIZE * np.ones(3),  # 3D pos
-             np.ones(3)]), self.num_anchors)             # 3D linvel/MAX_OBS_VEL
+             2*np.ones(3)]), self.num_anchors)             # 3D linvel/MAX_OBS_VEL
         if args.cam_resolution <= 0:  # report gripper positions as low-dim obs
             self.observation_space = gym.spaces.Box(
                 -1.0 * self.gripper_lims, self.gripper_lims)
@@ -99,7 +99,6 @@ class DeformEnv(gym.Env):
             print(f"Starting object ids: {self.object_ids}")
             print(f"Deformable ID: {res[1]}")
 
-        self.target_id = [ ] # self.rigid_ids as the target object if task is rigid pick
 
 
     @staticmethod
@@ -247,7 +246,7 @@ class DeformEnv(gym.Env):
             rigid_ids.append(id)
 
         # Mark the goal and store intermediate info for reward computations.
-        goal_poses = SCENE_INFO[scene_name]['goal_pos']
+        goal_poses = SCENE_INFO[scene_name]['goal_pos'] # when the task is rigid pick the goal is the target object
         if args.viz and debug:
             for i, goal_pos in enumerate(goal_poses):
                 print(f'goal_pos{i}', goal_pos)
@@ -263,9 +262,6 @@ class DeformEnv(gym.Env):
                 vertices.shape[0]), 20, replace=False)
             self.deform_init_shape = relative_dist[self.deform_shape_sample_idx]
             
-        if scene_name == 'rigidpick':
-            self.target_id = rigid_ids
-            pass  # TODO: add code for rigid pick task
 
         return rigid_ids, deform_id, deform_obj, np.array(goal_poses)
 
@@ -464,7 +460,7 @@ class DeformEnv(gym.Env):
         grip_obs = self.get_grip_obs()
         done = False
         grip_obs = np.nan_to_num(np.array(grip_obs))
-        if (np.abs(grip_obs) > self.gripper_lims).any():  # at workspace lims
+        if (np.abs(grip_obs) > self.gripper_lims).any():  # at workspace lims 
             if self.args.debug:
                 print('clipping grip_obs', grip_obs)
             grip_obs = np.clip(
