@@ -121,7 +121,8 @@ class RigidRobotEnv(DeformEnv):
         reward = self.get_reward()
         if done:  # if terminating early use reward from current step for rest
             reward *= (self.max_episode_len - self.stepnum)
-        done = (done or self.stepnum >= self.max_episode_len)
+        done = (done or self.stepnum >= self.max_episode_len or self._is_pick_place_success())
+
 
         # Update episode info and call make_final_steps if needed.
         if done:
@@ -176,7 +177,7 @@ class RigidRobotEnv(DeformEnv):
             sub_i += 1
             if sub_i >= n_slack:
                 diff = np.zeros_like(diff)  # set while loop to done
-    # XXX: This is a hack to make sure the robot is stable after moving.
+
     def make_final_steps(self):
         ee_pos, ee_ori, *_ = self.robot.get_ee_pos_ori_vel()
         final_action = np.hstack([ee_pos, ee_ori]).reshape(1, -1)
@@ -247,13 +248,25 @@ class RigidRobotEnv(DeformEnv):
         else:
             return -d
         
-    def _is_success(self, achieved_goal, desired_goal):
+    def _is_success(self, achieved_goal, desired_goal,tao=0.05):
         d = goal_distance(achieved_goal, desired_goal)
-        return (d < self.distance_threshold).astype(np.float32)
+        return (d < tao).astype(np.float32)
+    
+    def _is_griper_pick_success(self):
+        return  pybullet.getClosestPoints(self.robot.info.robot_id, self.pick_up_id, 0.0001) #如果臂和块足够靠近，可以锁死手爪
+
+
+    def _is_pick_place_success(self):
+        pick_up_pos = np.array(pybullet.getBasePositionAndOrientation(self.pick_up_id)[0])
+        place_pos = np.array(pybullet.getBasePositionAndOrientation(self.place_id[0])[0])
+        return self._is_griper_pick_success() and self._is_success(pick_up_pos, place_pos)
+    
+    
     
     def get_target_obs(self): # pick the target position or orientation
         target_pos = np.array(pybullet.getBasePositionAndOrientation(self.targetUid)[0]) # TODO:GET THE TARGET UID
         return target_pos
+    
 
 
 def goal_distance(goal_a, goal_b):
