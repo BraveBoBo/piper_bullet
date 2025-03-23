@@ -23,7 +23,9 @@ from ..utils.mesh_utils import get_mesh_data
 from ..utils.task_info import DEFORM_INFO, ROBOT_INFO
 
 from .deform_env import DeformEnv
-
+s=["initial", "prepick", "pick_start", "pick_end", "postpick",
+                 "clearance", "preplace", "place_start", "place_end",
+                 "postplace"]
 
 class RigidRobotEnv(DeformEnv):
     ORI_SIZE = 3 * 2  # EE 3D position + sin,cos for 3 Euler angles # original transform
@@ -45,6 +47,7 @@ class RigidRobotEnv(DeformEnv):
 
         self.place_id = [ ] # self.rigid_ids as the target object if task is rigid pick
         self.pick_up_id :int =None # self.deform_id as the target object if task is food picking
+        self.next_ee_state = "open" # 0:open, 1:pick up, 2:place down
 
     @staticmethod
     def unscale_pos(act, unscaled):
@@ -105,7 +108,11 @@ class RigidRobotEnv(DeformEnv):
             
     def step(self, action, unscaled=False):
         if self.args.debug:
-            print('action', action)
+            print('action', action);print('next_ee_state', self.next_ee_state)
+
+        is_griper_pick = False
+        is_pick_place = False
+
         if not unscaled:
             assert self.action_space.contains(action)
             assert ((np.abs(action) <= 1.0).all()), 'action must be in [-1, 1]'
@@ -116,12 +123,20 @@ class RigidRobotEnv(DeformEnv):
             self.do_action(action, unscaled)
             self.sim.stepSimulation()
 
-        # Get next obs, reward, done.
+        # Get next obs, reward, done. # done is True if the episode is over
         next_obs, done = self.get_obs()
         reward = self.get_reward()
         if done:  # if terminating early use reward from current step for rest
             reward *= (self.max_episode_len - self.stepnum)
-        done = (done or self.stepnum >= self.max_episode_len or self._is_pick_place_success())
+
+        is_griper_pick = self._is_griper_pick_success()
+        if is_griper_pick:
+            self.next_ee_state = "close"
+        is_pick_place = self._is_pick_place_success()
+        if is_pick_place:
+            self.next_ee_state = "open"
+
+        done = (done or self.stepnum >= self.max_episode_len or (is_griper_pick and is_pick_place))
 
 
         # Update episode info and call make_final_steps if needed.
@@ -134,7 +149,7 @@ class RigidRobotEnv(DeformEnv):
             info['final_reward'] = reward
             print(f'final_reward: {reward:.4f}')
         else:
-            info = {}
+            info = {"is_grasp": is_griper_pick, "is_place": is_pick_place}# next_ee_state
 
         self.episode_reward += reward  # update episode reward
 
@@ -153,7 +168,7 @@ class RigidRobotEnv(DeformEnv):
         ee_pos, ee_ori, _, _ = self.robot.get_ee_pos_ori_vel()
         tgt_pos = RigidRobotEnv.unscale_pos(action[0, :3], unscaled)
         tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:-1]
-        fing_dist = action[0, -1]
+        fing_dist = action[0, -1] 
         tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,'fing_dist': fing_dist}#how to deal with finger distance
         if self.num_anchors > 1:  # dual-arm
             res = self.robot.get_ee_pos_ori_vel(left=True)
@@ -248,18 +263,14 @@ class RigidRobotEnv(DeformEnv):
         else:
             return -d
         
-    def _is_success(self, achieved_goal, desired_goal,tao=0.05):
-        d = goal_distance(achieved_goal, desired_goal)
-        return (d < tao).astype(np.float32)
-    
     def _is_griper_pick_success(self):
-        return  pybullet.getClosestPoints(self.robot.info.robot_id, self.pick_up_id, 0.0001) #如果臂和块足够靠近，可以锁死手爪
+        return  pybullet.getClosestPoints(self.robot.info.robot_id, self.pick_up_id, 0.001) #如果臂和块足够靠近，可以锁死手爪
 
 
     def _is_pick_place_success(self):
         pick_up_pos = np.array(pybullet.getBasePositionAndOrientation(self.pick_up_id)[0])
         place_pos = np.array(pybullet.getBasePositionAndOrientation(self.place_id[0])[0])
-        return self._is_griper_pick_success() and self._is_success(pick_up_pos, place_pos)
+        return _is_success(pick_up_pos, place_pos)
     
     
     
@@ -268,6 +279,9 @@ class RigidRobotEnv(DeformEnv):
         return target_pos
     
 
+def _is_success(achieved_goal, desired_goal,tau=0.05):
+    d = goal_distance(achieved_goal, desired_goal)
+    return (d < tau).astype(np.float32)
 
 def goal_distance(goal_a, goal_b):
     assert goal_a.shape == goal_b.shape

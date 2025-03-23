@@ -32,6 +32,7 @@ import cv2
 from dedo.utils.bullet_manipulator import convert_all
 import pybullet
 
+from dedo.envs.rigid_robot_env import RigidRobotEnv
 
 def play(env, num_episodes, args):
     assert hasattr(env, 'deform_obj') or args.task == 'RigidPick',"Need to set deform_obj for deformable object"
@@ -78,7 +79,7 @@ def play(env, num_episodes, args):
 
         while True:
             assert (not isinstance(env.action_space, gym.spaces.Discrete))
-            acts = get_action(env, env.pick_up_id)
+            acts = _set_action(env, env.pick_up_id)
             act = acts[0] if isinstance(acts, list) else acts
             
             next_obs, rwd, done, info = env.step(act, unscaled=True)
@@ -119,35 +120,30 @@ def play(env, num_episodes, args):
         #     mean_rwd = np.sum(rwds)
         #     for i in range(31):
         #         wandb.log({'rollout/ep_rew_mean': mean_rwd, 'Step': i}, step=i)
-        # if vidwriter is not None:
+        # if vidwriter is not None:env
         #     vidwriter.release()
 
         # if args.pcd:
         #     render_video(f'{args.logdir}/pcd', 
         #                         f'{args.logdir}/pcd_preset_test.mp4')            
 
-def get_action(env, object_id):
-    """
-    根据 object_id 获取目标的状态（位置、旋转）并生成动作向量。
+def _set_action(env:RigidRobotEnv, object_id): # set 
 
-    参数:
-        env: 环境实例（当前未使用，可扩展）。
-        object_id: 单个 int 类型 id 或 int 类型 id 的列表。
-
-    返回:
-        如果 object_id 为 int,返回一个 numpy 数组；
-        如果 object_id 为列表,返回一个动作向量列表
-    """
     def compute_action(oid):
         pos, orn = pybullet.getBasePositionAndOrientation(oid)
         pos = np.array(pos)[np.newaxis]
         orn = np.array(pybullet.getEulerFromQuaternion(orn))[np.newaxis]
         orn = convert_all(orn, 'theta_to_sin_cos')
         return pos, orn
-    finger_dist = np.array([[0.7]])
+    
+    if env.next_ee_state == 'open':
+        finger_dist = np.array([[0.7]])
+    else:
+        finger_dist = np.array([[0.1]])
 
     if isinstance(object_id, int):
         pos, orn = compute_action(object_id)
+        orn = np.zeros_like(orn)
         return np.concatenate([pos, orn, finger_dist], axis=-1)
     elif isinstance(object_id, list):
         # 计算每个 object_id 的状态
@@ -156,9 +152,6 @@ def get_action(env, object_id):
         return [np.concatenate([pos, orn, finger_dist], axis=-1) for pos, orn in results]
     else:
         raise ValueError("object_id 必须为 int 或 int 类型的列表。")
-
-
-
 
 
 def viz_waypoints(sim, waypoints, rgba):

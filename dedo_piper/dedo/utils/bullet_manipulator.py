@@ -298,10 +298,15 @@ class BulletManipulator:
             targetPosition=ee_pos.tolist(), targetOrientation=ee_quat,
             **self.default_ik_args)
         qpos = np.array(qpos)
+          # continuous joints        
+
         for jid in self.info.finger_jids_lst:
-            qpos[jid] = np.clip(  # finger info (not set by IK)
-                fing_dist/2.0, self.info.joint_minpos[jid],
-                self.info.joint_maxpos[jid])
+            qpos[jid] = np.clip(
+                fing_dist/2.0 if self.info.joint_minpos[jid] >= 0 else -fing_dist/2.0,
+                self.info.joint_minpos[jid],
+                self.info.joint_maxpos[jid]
+            )
+
         #
         # Take care of left arm, if needed.
         #
