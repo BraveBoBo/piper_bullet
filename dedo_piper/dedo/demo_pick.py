@@ -33,7 +33,7 @@ from dedo.utils.bullet_manipulator import convert_all
 import pybullet
 
 from dedo.envs.rigid_robot_env import RigidRobotEnv
-
+from dedo.utils.candit_grasp import get_grasp
 def play(env, num_episodes, args):
     assert hasattr(env, 'deform_obj') or args.task == 'RigidPick',"Need to set deform_obj for deformable object"
     if args.task =='RigidPick':
@@ -130,7 +130,7 @@ def play(env, num_episodes, args):
 def _set_action(env:RigidRobotEnv, object_id): # set 
 
     def compute_action(oid):
-        pos, orn = pybullet.getBasePositionAndOrientation(oid)
+        pos, orn = get_grasp()
         pos = np.array(pos)[np.newaxis]
         orn = np.array(pybullet.getEulerFromQuaternion(orn))[np.newaxis]
         orn = convert_all(orn, 'theta_to_sin_cos')
@@ -143,7 +143,6 @@ def _set_action(env:RigidRobotEnv, object_id): # set
 
     if isinstance(object_id, int):
         pos, orn = compute_action(object_id)
-        orn = np.zeros_like(orn)
         return np.concatenate([pos, orn, finger_dist], axis=-1)
     elif isinstance(object_id, list):
         # 计算每个 object_id 的状态
