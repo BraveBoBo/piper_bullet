@@ -20,6 +20,10 @@ def play(env, num_episodes=500):
     for episode in range(num_episodes):
 
         obs = env.reset()
+        import cv2
+        cv2.imshow('obs', obs)
+        cv2.waitKey(0)
+
         if args.cam_resolution > 0:
             img = env.render(mode='rgb_array', width=args.cam_resolution,
                              height=args.cam_resolution)
@@ -46,7 +50,7 @@ def main(args):
     obs = env.reset()
     print('obs', obs)
     print('obs shape', obs.shape)
-    play(env, num_episodes=500)
+    play(env, num_episodes=5)
 
 
 

@@ -17,6 +17,7 @@ import pybullet_data
 
 from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO,DEFAULT_CAM, DEFAULT_CAM_PROJECTION
 from piper.bullet_manipulator import BulletManipulator
+from piper.camera_utils import cameraConfig
 # --------------------
 # Environment for rigid body grasping
 # --------------------
@@ -192,6 +193,7 @@ class RigidGrasping(gym.Env):
         self.stepnum = 0
         self.episode_reward = 0.0
         self.anchors = {}
+        self.camera_config = cameraConfig.from_file(self.args.cam_config_path)
 
         if self.args.viz:  # no rendering during load
             self.sim.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 0)
@@ -277,12 +279,25 @@ class RigidGrasping(gym.Env):
         return obs, done
 
 
-    def render(self, mode='rgb_array', width=300, height=300):
+    def render(self, mode='rgb_array', width=1280, height=720):
         assert (mode == 'rgb_array')
+        # w, h, rgba_px, _, _ = self.sim.getCameraImage(
+        #     width=width, height=height,
+        #     renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
+        #     viewMatrix=self._cam_viewmat, **DEFAULT_CAM_PROJECTION)
+        
+        # if self.args.debug:
+        #     print('Camera image', w, h, rgba_px.shape)
+        CAM_PROJECTION = {
+        # Camera info for {cameraDistance: 11.0, cameraYaw: 140,
+        # cameraPitch: -40, cameraTargetPosition: array([0., 0., 0.])}
+        'projectionMatrix': self.camera_config.proj_matrix,
+        }
         w, h, rgba_px, _, _ = self.sim.getCameraImage(
             width=width, height=height,
             renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
-            viewMatrix=self._cam_viewmat, **DEFAULT_CAM_PROJECTION)
+            viewMatrix=self.camera_config.view_matrix,**CAM_PROJECTION)
+        
         # If getCameraImage() returns a tuple instead of numpy array that
         # means that pybullet was installed without numpy being present.
         # Uninstall pybullet, then install numpy, then install pybullet.
