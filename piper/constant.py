@@ -3,13 +3,13 @@ import numpy as np
 SCENE_INFO ={
     'rigid_grasp': {
         'entities': {
-            'urdf/borders.urdf': {
-                'basePosition': [-1.5, 2.0, 0.5],
-                'baseOrientation': [0, 0, 0],
-                'globalScaling': 4.0,
-                'mass': 0,
-                'useTexture': True,
-            },
+            # 'urdf/borders.urdf': {
+            #     'basePosition': [-1.5, 2.0, 0.5],
+            #     'baseOrientation': [0, 0, 0],
+            #     'globalScaling': 4.0,
+            #     'mass': 0,
+            #     'useTexture': True,
+            # },
             # 'ycb/004_sugar_box/google_16k/textured.obj': {
             # 'ycb/009_gelatin_box/google_16k/textured.obj': {
             'ycb/003_cracker_box/google_16k/textured.obj': {

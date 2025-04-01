@@ -246,7 +246,7 @@ def merge_o3d_triangle_meshes(meshes):
     :return: a merged o3d.geometry.TriangleMesh
     """
     vertices = np.empty(shape=(0, 3), dtype=np.float64)
-    triangles = np.empty(shape=(0, 3), dtype=np.int)
+    triangles = np.empty(shape=(0, 3), dtype=np.int32)
     for mesh in meshes:
         v = np.asarray(mesh.vertices)  # float list (n, 3)
         t = np.asarray(mesh.triangles)  # int list (n, 3)
@@ -395,3 +395,12 @@ def dict_to_str(dictionary, indent=1):
         else:
             strings.append(f'{indent_str}{str(key)}: {str(value)}')
     return '\n'.join(strings)
+
+def load_mesh(mesh_fn, texture_fn=None):
+    mesh = o3d.io.read_triangle_mesh(mesh_fn, enable_post_processing=True)
+    if texture_fn is not None:
+        mesh.textures = [o3d.io.read_image(texture_fn)]
+
+    mesh.compute_vertex_normals()
+    mesh.compute_triangle_normals()
+    return mesh

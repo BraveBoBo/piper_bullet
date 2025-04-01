@@ -1,5 +1,6 @@
 import numpy as np
 import quaternion
+import open3d as o3d
 
 
 class Grasp:

@@ -5,9 +5,9 @@ import numpy as np
 import trimesh
 from matplotlib import pyplot as plt
 
-from . import core
-from . import util
-from . import grasp
+
+import util
+import grasp
 
 
 def _convert_geometries_to_o3d_objects(geometry_list):
@@ -30,12 +30,12 @@ def _convert_geometries_to_o3d_objects(geometry_list):
             o3d_objs.append(geometry.as_open3d)
         elif isinstance(geometry, np.ndarray):
             o3d_objs.append(util.numpy_pc_to_o3d(geometry))
-        elif isinstance(geometry, core.ObjectType):
-            o3d_objs.append(geometry.mesh)
-        elif isinstance(geometry, core.ObjectInstance):
-            o3d_objs.append(geometry.get_mesh())
-        elif isinstance(geometry, core.Scene):
-            o3d_objs.extend(geometry.get_mesh_list())
+        # elif isinstance(geometry, core.ObjectType):
+        #     o3d_objs.append(geometry.mesh)
+        # elif isinstance(geometry, core.ObjectInstance):
+        #     o3d_objs.append(geometry.get_mesh())
+        # elif isinstance(geometry, core.Scene):
+        #     o3d_objs.extend(geometry.get_mesh_list())
         else:
             raise TypeError(f'geometry in list is of unsupported type {type(geometry)}')
 
@@ -57,7 +57,7 @@ def show_geometries(geometry_list, colorize=True):
 
     if colorize:
         _colorize_o3d_objects(o3d_objs)
-    o3d.visualization.draw(o3d_objs)
+    o3d.visualization.draw_geometries(o3d_objs)
 
 
 def _colorize_o3d_objects(o3d_objects, colormap_name='tab20'):
@@ -125,6 +125,8 @@ def show_grasp_set(objects: list, gs, gripper=None, n=None, score_color_func=Non
             tf_squeeze[0, 0] = (g.width + 0.005) / gripper.opening_width
 
         gripper_vis.transform(g.pose @ tf_squeeze @ tf)
+        # gripper_vis.transform(g.pose)
+        # gripper_vis.transform(g.pose @ tf_squeeze @ tf)
 
         if score_color_func is not None:
             gripper_vis.paint_uniform_color(score_color_func(g.score))

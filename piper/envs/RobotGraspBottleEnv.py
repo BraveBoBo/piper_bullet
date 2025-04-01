@@ -7,6 +7,7 @@ import wandb
 import cv2
 from matplotlib import cm  # for colors
 import numpy as np
+import open3d as o3d
 
 
 
@@ -18,6 +19,10 @@ import pybullet_data
 from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO,DEFAULT_CAM, DEFAULT_CAM_PROJECTION
 from piper.bullet_manipulator import BulletManipulator
 from piper.camera_utils import cameraConfig
+from piper.gripper import PiperGripper
+from piper.grasp import Grasp
+from piper.sampling import AntipodalGraspSampler
+from piper import util
 # --------------------
 # Environment for rigid body grasping
 # --------------------
@@ -35,7 +40,14 @@ class RigidGrasping(gym.Env):
     ORI_SIZE = 3 * 2  # 3D position + sin,cos for 3 Euler angles
     FING_DIST = 0.01  # default finger distance
 
-
+    SOLVER_STEPS = 100  # a bit more than default helps in contact-rich tasks
+    dt = 1. / 240.  # this is the default and should not be changed light-heartedly
+    TIME_SLEEP = dt * 3  # for visualization
+    SPINNING_FRICTION = 0.1
+    SPINNING_FRICTION = 0.003  # this setting is used in AdaGrasp
+    ROLLING_FRICTION = 0.0001
+    MIN_OBJ_MASS = 0.05  # small masses will be replaced by this (could tune a bit more, in combo with solver)
+    JOINT_TYPES = ["REVOLUTE", "PRISMATIC", "SPHERICAL", "PLANAR", "FIXED"]
 
     def __init__(self, args):
         self.args = args
@@ -60,6 +72,12 @@ class RigidGrasping(gym.Env):
         # load the robot
         self.load_robot(self.sim, args, debug=args.debug)
 
+        # load the gripper and the grasp and the sample the grasp
+        gripper = PiperGripper()
+        grasp = Grasp()
+        sample = AntipodalGraspSampler()
+
+
 
         self.max_episode_len = self.args.max_episode_len
                 # Define sizes of observation and action spaces.
@@ -80,6 +98,8 @@ class RigidGrasping(gym.Env):
                 dtype=np.uint8 if args.uint8_pixels else np.float16,
                 shape=shape)            
 
+        # Define grasp and the griper
+        # make the gripper and the grasp
 
         act_sz = 3+1 # 3D pos + 1D finger distance
         act_sz += RigidGrasping.ORI_SIZE # sin,cos for 3 Euler angles
@@ -88,6 +108,7 @@ class RigidGrasping(gym.Env):
             np.ones(self.num_anchors * act_sz))
         if self.args.debug:
             print('Wrapped as DeformEnvRobot with act', self.action_space)
+
 
     def seed(self, seed):
         np.random.seed(seed)
@@ -130,6 +151,9 @@ class RigidGrasping(gym.Env):
         goal_poses = SCENE_INFO[scene_name]['goal_pos']
 
         return rigid_ids,np.array(goal_poses)
+
+
+
 
     def load_rigid_object(self, sim, obj_file_name, scale, init_pos, init_ori,
                         mass=0.0, texture_file=None, rgba_color=None):
@@ -190,6 +214,8 @@ class RigidGrasping(gym.Env):
         return sim
     
     def reset(self):
+
+
         self.stepnum = 0
         self.episode_reward = 0.0
         self.anchors = {}
@@ -202,8 +228,11 @@ class RigidGrasping(gym.Env):
         plane_texture_path = os.path.join(
             self.args.data_path,  self.get_texture_path(
                 self.args.plane_texture_file))
+        
         reset_bullet(self.args, self.sim, plane_texture=plane_texture_path)
+
         res = self.load_objects(self.sim, self.args, self.args.debug)
+
         self.rigid_ids, self.goal_pos = res
 
         self.load_floor(self.sim, plane_texture=plane_texture_path,
@@ -211,6 +240,13 @@ class RigidGrasping(gym.Env):
         
         self.load_robot(self.sim, self.args, debug=self.args.debug)
         
+        # load the gripper and the grasp and the sample the grasp
+        self.gripper = PiperGripper()
+        self.grasp = Grasp()
+        self.antipodgraspsample = AntipodalGraspSampler()
+        self.antipodgraspsample = self.setup_grasp_sampler()
+
+
         self.sim.stepSimulation()  # step once to get initial state
 
         # Set up viz.
@@ -222,6 +258,20 @@ class RigidGrasping(gym.Env):
 
         obs, _ = self.get_obs()
         return obs
+    
+    def setup_grasp_sampler(self):
+        self.antipodgraspsample.mesh = load_o3d_mesh(self.args)
+        self.antipodgraspsample.gripper = self.gripper
+        self.antipodgraspsample.n_orientations = 18
+        self.antipodgraspsample.verbose = True
+        self.antipodgraspsample.max_targets_per_ref_point = 1
+        return self.antipodgraspsample
+
+
+    def grasp_pose_from_antipodal(self,n=1000):
+        return self.antipodgraspsample.sample(n)
+
+
 
     def load_robot(self, sim,args,debug=False):
         """Load a robot from file, create visual and collision shapes."""
@@ -288,11 +338,13 @@ class RigidGrasping(gym.Env):
         
         # if self.args.debug:
         #     print('Camera image', w, h, rgba_px.shape)
+
         CAM_PROJECTION = {
         # Camera info for {cameraDistance: 11.0, cameraYaw: 140,
         # cameraPitch: -40, cameraTargetPosition: array([0., 0., 0.])}
         'projectionMatrix': self.camera_config.proj_matrix,
         }
+
         w, h, rgba_px, _, _ = self.sim.getCameraImage(
             width=width, height=height,
             renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
@@ -305,7 +357,32 @@ class RigidGrasping(gym.Env):
         img = rgba_px[:, :, 0:3]
         return img
     
+    def _are_in_collision(self, body_id_1, body_id_2):
+        """
+        checks if two bodies are in collision with each other.
 
+        :return: bool, True if the two bodies are in collision
+        """
+        max_distance = 0.01  # 1cm for now, might want to choose a more reasonable value
+        points = self.sim.getClosestPoints(body_id_1, body_id_2, max_distance)
+
+        if self.args.debug:
+            print(f'checking collision between {self.sim.getBodyInfo(body_id_1)} and {self._p.getBodyInfo(body_id_2)}')
+            print(f'found {len(points)} points')
+
+        n_colliding_points = 0
+        distances = []
+        for point in points:
+            distance = point[8]
+            distances.append(distance)
+            if distance < 0:
+                n_colliding_points += 1
+
+        if self.args.debug:
+            print(f'of which {n_colliding_points} have a negative distance (i.e. are in collision)')
+            print(f'distances are: {distances}')
+
+        return n_colliding_points > 0
 
 
 def reset_bullet(args, sim, plane_texture=None, debug=False):
@@ -331,3 +408,40 @@ def reset_bullet(args, sim, plane_texture=None, debug=False):
     sim.setAdditionalSearchPath(pybullet_data.getDataPath())
     # sim.setRealTimeSimulation(1)
     return
+
+def load_o3d_mesh(args,tr=None,texture_fn=None,debug=False):
+    data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
+    args.data_path = data_path
+    meshes = []
+    for name, kwargs in SCENE_INFO[scene_name]['entities'].items():
+        # load the object
+        mesh_fn = os.path.join(args.data_path, name)
+        assert os.path.exists(mesh_fn), f'{mesh_fn} not found'
+        mesh = o3d.io.read_triangle_mesh(mesh_fn, enable_post_processing=True)
+        
+        if tr is None:
+            # set the transform as the same as the rigid object
+            tr = np.eye(4)
+            tr[:3, 3] = kwargs['basePosition']  # object position
+            tr[:3, :3] = o3d.geometry.get_rotation_matrix_from_xyz(
+                kwargs['baseOrientation'])
+            
+        mesh.transform(tr)
+
+        if texture_fn is not None:
+            mesh.textures = [o3d.io.read_image(texture_fn)]
+
+        mesh.compute_vertex_normals()
+        mesh.compute_triangle_normals()
+        meshes.append(mesh)
+        if debug:
+            from piper.visualization import _colorize_o3d_objects
+            # show the mesh
+        
+            _colorize_o3d_objects([o3d.geometry.TriangleMesh.create_coordinate_frame(0.02),mesh])
+            o3d.visualization.draw_geometries([o3d.geometry.TriangleMesh.create_coordinate_frame(0.02),mesh])
+            # show the base frame
+
+            # time.sleep(10)
+
+    return meshes[0] if len(meshes) == 1 else meshes

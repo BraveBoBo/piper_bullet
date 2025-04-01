@@ -7,11 +7,11 @@ import open3d as o3d
 from tqdm import tqdm
 from scipy.spatial.transform import Rotation as R
 
-from . import core
-from . import grasp
-from . import util
-from . import visualization
-from . import mesh_processing
+# from . import core
+import grasp
+import util
+import visualization
+# from . import mesh_processing
 
 
 def rays_within_cone(axis, angle, n=10, uniform_on_plane=False):
@@ -188,7 +188,8 @@ class AntipodalGraspSampler:
             print('preparing to sample grasps...')
         # we need collision operations which are not available in o3d yet
         # hence convert the mesh to trimesh
-        self._trimesh = mesh_processing.as_trimesh(self.mesh)
+        self._trimesh = as_trimesh(self.mesh)
+        # self._trimesh = mesh_processing.as_trimesh(self.mesh)
         intersector = trimesh.ray.ray_triangle.RayMeshIntersector(self._trimesh)
 
         # we need to sample reference points from the mesh
@@ -197,7 +198,8 @@ class AntipodalGraspSampler:
         # therefore, we first sample many points at once and then just use some of these at random
         # let's have a wild guess of how many are many ...
         n_sample = np.max([n, 1000, len(self.mesh.triangles)])
-        ref_points = util.o3d_pc_to_numpy(mesh_processing.poisson_disk_sampling(self.mesh, n_points=n_sample))
+        ref_points = util.o3d_pc_to_numpy(poisson_disk_sampling(self.mesh, n_points=n_sample))
+        # ref_points = util.o3d_pc_to_numpy(mesh_processing.poisson_disk_sampling(self.mesh, n_points=n_sample))
         np.random.shuffle(ref_points)
 
         if self.no_contact_below_z is not None:
@@ -256,7 +258,8 @@ class AntipodalGraspSampler:
                 if len(locations) == 0:
                     continue
 
-                normals = mesh_processing.compute_interpolated_vertex_normals(self._trimesh, locations, index_tri)
+                normals = compute_interpolated_vertex_normals(self._trimesh, locations, index_tri)
+                # normals = mesh_processing.compute_interpolated_vertex_normals(self._trimesh, locations, index_tri)
 
                 if self.verbose_debug:
                     # visualize candidate points and normals
@@ -371,18 +374,21 @@ class AntipodalGraspSampler:
         # hence use trimesh
         manager = trimesh.collision.CollisionManager()
         if not exclude_shape:
-            self._trimesh = mesh_processing.as_trimesh(self.mesh)
+            self._trimesh = as_trimesh(self.mesh)
+            # self._trimesh = mesh_processing.as_trimesh(self.mesh)
             manager.add_object('shape', self._trimesh)
 
         # additional objects
         if additional_objects:
             for i, obj in enumerate(additional_objects):
-                manager.add_object(f'add_obj_{i}', mesh_processing.as_trimesh(obj))
+                manager.add_object(f'add_obj_{i}', as_trimesh(obj))
+                # manager.add_object(f'add_obj_{i}', mesh_processing.as_trimesh(obj))
 
         gripper_mesh = copy.deepcopy(self.gripper.mesh)
         tf = self.gripper.tf_base_to_TCP
         gripper_mesh.transform(tf)
-        gripper_mesh = mesh_processing.as_trimesh(gripper_mesh)
+        gripper_mesh = as_trimesh(gripper_mesh)
+        # gripper_mesh = mesh_processing.as_trimesh(gripper_mesh)
 
         collision_array = np.empty(len(graspset), dtype=np.bool)
 
@@ -494,7 +500,7 @@ def farthest_point_sampling(point_cloud, k):
 
     return farthest_pts_indices
 
-
+'''
 def sample_scene(object_library, ground_area, instances_per_scene, instances_per_object=1, max_tries=20):
     """
     Samples a physically plausible scene using the objects in the given object_library.
@@ -567,4 +573,106 @@ def sample_scene(object_library, ground_area, instances_per_scene, instances_per
     # question is, do we do this in this function? it is actually separate from sampling, so potentially we should
     # do this somewhere else (the caller shall decide)
     return scene
+'''
 
+def as_trimesh(mesh):
+    """
+    Makes sure the mesh is represented as trimesh. Raises an error if unrecognised mesh type.
+
+    :param mesh: Can be open3d.geometry.TriangleMesh or trimesh.Trimesh
+
+    :return: trimesh.Trimesh
+    """
+    if isinstance(mesh, trimesh.Trimesh):
+        return mesh
+    if isinstance(mesh, o3d.geometry.TriangleMesh):
+        if mesh.has_vertex_normals():
+            vertex_normals = np.asarray(mesh.vertex_normals)
+        else:
+            vertex_normals = None
+        if mesh.has_triangle_normals():
+            triangle_normals = np.asarray(mesh.triangle_normals)
+        else:
+            triangle_normals = None
+        return trimesh.Trimesh(np.asarray(mesh.vertices), np.asarray(mesh.triangles),
+                               vertex_normals=vertex_normals, triangle_normals=triangle_normals)
+    raise TypeError(f'Given mesh must be trimesh or o3d mesh. Got {type(mesh)} instead.')
+
+def poisson_disk_sampling(mesh, radius=0.003, n_points=None, with_normals=True, init_factor=5):
+    """
+    Performs poisson disk sampling.
+    Per default it uses the radius, but if `n_points` is given it just samples as many points.
+    Ideally, we fit circles with a certain radius on the surface area of the mesh. The center points
+    will then form the point cloud. In practice, we just randomly sample a certain number of points (depending
+    on the surface area of the mesh, the radius and init_factor), then we eliminate points which do not fit well.
+
+    :param mesh: open3d.geometry.TriangleMesh
+    :param radius: the smaller the radius, the higher the point density will be
+    :param init_factor: we will initially sample `init_factor` times more points than will be needed, if better
+                        accuracy is desired this can be increased, if performance is important this should be decreased
+    :param with_normals: whether or not the points shall have normals (default is True)
+    :param n_points: int, if given, it will simply sample as many points (which are approx evenly distributed)
+
+    :return: open3d.geometry.PointCloud object
+    """
+    if n_points is None:
+        # we assume the surface area to be square and use a square packing of circles
+        # the number n_s of circles along the side-length s can then be estimated with
+        s = np.sqrt(mesh.get_surface_area())
+        n_s = (s + 2*radius) / (2*radius)
+        n_points = int(n_s**2)
+        print(f'going for {n_points} points')
+
+    pc = mesh.sample_points_poisson_disk(
+        number_of_points=n_points,
+        init_factor=init_factor,
+        use_triangle_normal=with_normals
+    )
+
+    return pc
+
+
+def compute_interpolated_vertex_normals(mesh, points, triangle_indices=None):
+    """
+    Computes the interpolated vertex normals for the given points. I.e., for each point we will average the normals of
+    the vertices of the triangle the point lies in, weighted based on the point's distance to the vertices.
+    Specifically, weight = 1/sqrt(distance).
+    If known, please provide the triangle_indices corresponding to the points, otherwise we will try to identify
+    them based on the mesh, but this takes quite long. We assume that all points are sampled from the mesh surface.
+    This method will happily produce garbage results if you put in random points.
+
+    :param mesh: Can be open3d.geometry.TriangleMesh or trimesh.Trimesh
+    :param points: (n, 3) the points for which we want to compute interpolated vertex normals.
+    :param triangle_indices: (n,)
+
+    :return: (n, 3) surface normals (normalised)
+    """
+    mesh = as_trimesh(mesh)
+
+    # find the triangles if not provided
+    if triangle_indices is None:
+        closest_points, distances, triangle_indices = trimesh.proximity.closest_point(mesh, points)
+    else:
+        closest_points = points
+
+    # get the vertex_normals of each triangle
+    faces = mesh.faces[triangle_indices]
+    vertices = mesh.vertices[faces]
+    vertex_normals = mesh.vertex_normals[faces]
+
+    # compute weight based on distance of the point to the vertices of its triangle
+    dist = np.linalg.norm(vertices - closest_points[:, None, :], axis=-1)
+    weights = 1 / (dist ** (1 / 2))  # division by zero could happen if dist == 0 (point exactly on vertex)
+    # to avoid nan values in normals, let's correct corresponding weights explicitly
+    nan_indices = np.nonzero(dist == 0)
+    for i in range(len(nan_indices[0])):
+        point_idx, dim_idx = nan_indices[0][i], nan_indices[1][i]
+        w = np.zeros(3)
+        w[dim_idx] = 1.
+        weights[point_idx] = w
+
+    normals = np.average(weights[:, :, None] * vertex_normals, axis=1)
+    normals = normals / np.linalg.norm(normals, axis=-1)[:, None]
+
+    assert not np.isnan(normals).any(), 'normal computation has produced nans for some reason!!'
+    return normals

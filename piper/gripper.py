@@ -2,8 +2,7 @@ import os
 
 import numpy as np
 import open3d as o3d
-
-from . import util
+import util
 
 
 class ParallelJawGripper:
@@ -127,7 +126,53 @@ class Robotiq2F85(ParallelJawGripper):
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 0.0, -1.0, 0.15],  # in manual, TCP is at 0.171, which is with finger tips closed
             [0.0, 0.0, 0.0, 1.0]
-        ])
+        ])# 
         # todo: if we actually make a package distribution, this might not work anymore
         self._path_to_urdf = os.path.join(os.path.dirname(__file__), '../data/gripper/robotiq-2f-85/robotiq_2f_85.urdf')
         print(f'path to urdf evaluated to {self._path_to_urdf}')
+
+
+class PiperGripper(ParallelJawGripper):
+    """
+    An implementation of the Robotiq 2F-85 gripper.
+    Note that this gripper does not perform purely parallel grasps - in fact the finger pads will move towards
+    the object (up to 14mm) as the grasp closing is executed.
+    If the object contact is made below the equilibrium line, the grasp will be an encompassing grasp rather
+    than a parallel grasp.
+    These behaviours will be considered only during simulation, for all other concerns we treat it as simple
+    parallel jaw gripper (with open jaw).
+    """
+    def __init__(self):
+        super().__init__(
+            finger_length=0.073,  # length of the pads, but position is changing during the grasp
+            opening_width=0.074,
+            finger_thickness=0.035,  # width of the pads
+        )
+        self._tf_base_to_TCP = np.array([
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0, 0.073],  # in manual, TCP is at 0.171, which is with finger tips closed
+            [0.0, 0.0, 0.0, 1.0] #
+        ])
+        # todo: if we actually make a package distribution, this might not work anymore 
+        # can filter the path to urdf
+
+
+
+        self._path_to_urdf = os.path.join(os.path.dirname(__file__), '../data/gripper/robotiq-2f-85/robotiq_2f_85.urdf')
+        print(f'path to urdf evaluated to {self._path_to_urdf}')
+
+    def _get_tf_base_to_TCP(self):
+        
+        raise NotImplementedError('This gripper does not have a fixed TCP. Use the gripper pose instead.')
+
+
+
+if __name__ == '__main__':
+    # gripper = PiperGrispper()
+    from grasp import GraspSet
+    from visualization import show_grasp_set
+    gripper = PiperGripper()
+    gs = GraspSet.from_translations(np.asarray([0, 0, 0]).reshape(-1, 3))
+    show_grasp_set([o3d.geometry.TriangleMesh.create_coordinate_frame(0.02)],
+                                      gs, gripper=gripper,with_plane=True)
