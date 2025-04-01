@@ -1,0 +1,24 @@
+---
+yaml_file_type: "ObjectLibrary"
+yaml_file_version: "1.0"
+name: "Example Library"
+description: "This is a library of two YCB objects as example."
+objects:
+  -
+    identifier: 025_mug
+    name: mug
+    thumbnail_fn: null
+    mesh_fn: meshes/025_mug/google_16k/textured.obj
+    vhacd_fn: vhacs/025_mug_vhacd.obj
+    urdf_fn: urdf/025_mug.urdf
+    mass: 0.118
+    friction_coeff: null
+  -
+    identifier: 051_large_clamp
+    name: large clamp
+    thumbnail_fn: null
+    mesh_fn: meshes/051_large_clamp/google_16k/textured.obj
+    vhacd_fn: vhacs/051_large_clamp_vhacd.obj
+    urdf_fn: urdf/051_large_clamp.urdf
+    mass: 0.125
+    friction_coeff: null

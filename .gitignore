@@ -6,7 +6,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+Autonomous-Grasp-from-Point-Cloud-main/
 # C extensions
 *.so
 
