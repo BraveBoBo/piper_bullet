@@ -16,7 +16,7 @@ import pybullet
 import pybullet_utils.bullet_client as bclient
 import pybullet_data
 
-from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO,DEFAULT_CAM, DEFAULT_CAM_PROJECTION
+from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO
 from piper.bullet_manipulator import BulletManipulator
 from piper.camera_utils import cameraConfig
 from piper.gripper import PiperGripper
@@ -227,7 +227,6 @@ class RigidGrasping(gym.Env):
     
     def reset(self):
 
-
         self.stepnum = 0
         self.episode_reward = 0.0
         self.anchors = {}
@@ -268,10 +267,9 @@ class RigidGrasping(gym.Env):
             time.sleep(0.1)  # wait for debug visualizer to catch up
             self.sim.stepSimulation()  # step once to get initial state
             self.sim.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 1)
-
-
         obs, _ = self.get_obs()
         return obs
+    
     
     def setup_grasp_sampler(self):
         self.antipodgraspsample.mesh = load_o3d_mesh(self.args)
@@ -402,17 +400,8 @@ class RigidGrasping(gym.Env):
 
     def render(self, mode='rgb_array', width=1280, height=720):
         assert (mode == 'rgb_array')
-        # w, h, rgba_px, _, _ = self.sim.getCameraImage(
-        #     width=width, height=height,
-        #     renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
-        #     viewMatrix=self._cam_viewmat, **DEFAULT_CAM_PROJECTION)
-        
-        # if self.args.debug:
-        #     print('Camera image', w, h, rgba_px.shape)
 
         CAM_PROJECTION = {
-        # Camera info for {cameraDistance: 11.0, cameraYaw: 140,
-        # cameraPitch: -40, cameraTargetPosition: array([0., 0., 0.])}
         'projectionMatrix': self.camera_config.proj_matrix,
         }
 
@@ -421,9 +410,6 @@ class RigidGrasping(gym.Env):
             renderer=pybullet.ER_BULLET_HARDWARE_OPENGL,
             viewMatrix=self.camera_config.view_matrix,**CAM_PROJECTION)
         
-        # If getCameraImage() returns a tuple instead of numpy array that
-        # means that pybullet was installed without numpy being present.
-        # Uninstall pybullet, then install numpy, then install pybullet.
         assert (isinstance(rgba_px, np.ndarray)), 'Install numpy, then pybullet'
         img = rgba_px[:, :, 0:3]
         return img
@@ -440,7 +426,7 @@ class RigidGrasping(gym.Env):
             'type': self.JOINT_TYPES[info[2]],
             'friction': info[7],
             'lower_limit': info[8],
-            'upper limit': info[9],
+            'upper_limit': info[9],
             'max_force': info[10],
             'max_velocity': info[11],
             'joint_axis': info[13],
@@ -459,7 +445,7 @@ class RigidGrasping(gym.Env):
         points = self.sim.getClosestPoints(body_id_1, body_id_2, max_distance)
 
         if self.args.debug:
-            print(f'checking collision between {self.sim.getBodyInfo(body_id_1)} and {self._p.getBodyInfo(body_id_2)}')
+            print(f'checking collision between {self.sim.getBodyInfo(body_id_1)} and {self.sim.getBodyInfo(body_id_2)}')
             print(f'found {len(points)} points')
 
         n_colliding_points = 0
@@ -532,18 +518,16 @@ class RigidGrasping(gym.Env):
         print('grasp_pos', grasp_pos)
         print('grasp_quat', grasp_quat)
         # load a dummy robot which we can move everywhere and connect the gripper to it
-        self.piper_gripper,gripper_joints = self.load_gripper(self.sim, args=self.args,
+        self.piper_gripper,self.gripper_joints = self.load_gripper(self.sim, args=self.args,
             position=gripper_pos, orientation=gripper_quat,
             fixed_base=False, friction=None, debug=debug)
-            
         
-
-
         ###################################
         # PHASE:  OPEN THE GRIPPER
         # open the gripper  
-        # 
-
+        if self._check_gripper_closed():
+            distance = self.open_gripper()
+            print("左右手指之间的距离:", distance)
 
 
         ###################################
@@ -561,6 +545,12 @@ class RigidGrasping(gym.Env):
 
         if debug:
             print('COLLISION CHECKS PASSED... press enter to continue')
+
+        ##############################
+        # PHASE 2: CLOSING FINGER TIPS
+        # now we need to link the finger tips together, so they mimic their movement
+        # this variant is by https://github.com/lzylucy/graspGripper
+        # using link 1 as master with velocity control, and all other links use position control to follow 1
 
         ##############################
         # PHASE 2: CLOSING FINGER TIPS
@@ -586,6 +576,70 @@ class RigidGrasping(gym.Env):
         #         break
         
 
+
+    def _are_in_contact(self, body_id_1, link_id_1, body_id_2, link_id_2):
+        """
+        checks if the links of two bodies are in contact.
+        """
+        contacts = self.sim.getContactPoints(body_id_1, body_id_2, link_id_1, link_id_2)
+        return len(contacts) > 0
+    
+    def _both_fingers_touch_object(self, link_finger_1, link_finger_2):
+        contact_1 = self._are_in_contact(
+            self.piper_gripper, link_finger_1,
+            self.rigid_ids[0], -1) # -1 means all links
+
+        if not contact_1:
+            return False
+
+        contact_2 = self._are_in_contact(
+            self.piper_gripper, link_finger_2,
+            self.rigid_ids[0], -1)
+
+        return contact_2
+    
+    def _check_gripper_closed(self):
+        """
+        通过计算左右手指之间的距离，检查夹爪是否闭合。
+        Returns:
+            bool: 如果夹爪闭合（左右手指距离小于阈值），返回 True，否则返回 False。
+        """
+        distance = self._get_finger_distance()
+        print("左右手指之间的距离:", distance)
+        
+        # 定义一个阈值，当左右手指之间的距离小于此阈值时，认为夹爪已闭合
+        # 阈值根据具体夹爪的尺寸设定，这里示例设为 0.01 米
+        closure_distance_threshold = 0.03
+        
+        return distance < closure_distance_threshold
+
+    
+    def _get_finger_distance(self):
+
+        # 获取左手指和右手指的链接状态，返回值第 0 个元素为链接在世界坐标系下的位置
+        left_state = self.sim.getLinkState(self.piper_gripper, self.gripper_joints["left_finger"]['id'])
+        right_state = self.sim.getLinkState(self.piper_gripper, self.gripper_joints["right_finger"]['id'])
+        
+        left_pos = np.array(left_state[0])
+        right_pos = np.array(right_state[0])
+        
+        # 计算左右手指之间的欧几里得距离
+        distance = np.linalg.norm(left_pos - right_pos)
+        return distance
+
+
+    def open_gripper(self):
+        self.sim.setJointMotorControlArray(
+            self.piper_gripper, \
+            [self.gripper_joints['left_finger']['id'],self.gripper_joints['right_finger']['id']], \
+            pybullet.POSITION_CONTROL,
+            [self.gripper_joints['left_finger']['upper_limit'], self.gripper_joints['right_finger']['lower_limit']],  # open gripper
+            positionGains=np.ones(2)
+        ) 
+        for _ in range(240):  # 大约模拟1秒（240Hz）
+            self.sim.stepSimulation()
+            time.sleep(1.0/240.0)
+        return self._get_finger_distance()
 
 
 def reset_bullet(args, sim, plane_texture=None, debug=False):

@@ -18,7 +18,7 @@ camera ={
     "cam_resolution": (200,200),
 }
 
-camerapos=[0,0,8]
+camerapos=[0,0,1.5]
 
 def cal_d435(cameraPos = camerapos):
     global viewMatrix, rot
@@ -31,7 +31,7 @@ def cal_d435(cameraPos = camerapos):
     far = 20.0
     
     # 相机默认无旋转
-    qq = np.array([0, 0, 0, 1])
+    qq = np.array([0, 0, 0,1])
     rot = R.from_quat(qq).as_matrix()
     
     # 相机朝向（forward为负Z轴）
