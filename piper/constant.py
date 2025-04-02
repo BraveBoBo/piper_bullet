@@ -12,22 +12,23 @@ SCENE_INFO ={
             # },
             # 'ycb/004_sugar_box/google_16k/textured.obj': {
             # 'ycb/009_gelatin_box/google_16k/textured.obj': {
-            'ycb/003_cracker_box/google_16k/textured.obj': {
-                'basePosition': [1.8, 1.7, 0.25],
-                'baseOrientation': [0, 0, 0],
-                'globalScaling': 7.0,
-                'mass': 0.01,
-                'rgbaColor': (0.9, 0.75, 0.65, 1),
-            },
-            # 'ycb/005_tomato_soup_can/google_16k/textured.obj': {
-            # 'ycb/007_tuna_fish_can/google_16k/textured.obj': {
-            # 'ycb/002_master_chef_can/google_16k/textured.obj': {
-            #     'basePosition': [0.9, 1.5, 0.25],
+            # 'ycb/003_cracker_box/google_16k/textured.obj': {
+            #     'basePosition': [1.8, 1.7, 0.25],
             #     'baseOrientation': [0, 0, 0],
-            #     'globalScaling': 8.0,
+            #     'globalScaling': 7,
             #     'mass': 0.01,
             #     'rgbaColor': (0.9, 0.75, 0.65, 1),
             # },
+            # 'ycb/005_tomato_soup_can/google_16k/textured.obj': {
+            # 'ycb/007_tuna_fish_can/google_16k/textured.obj': {
+            'ycb/002_master_chef_can/google_16k/textured.obj': {
+                'basePosition': [0.09, 0.15, 0.025],
+                # 'basePosition': [0.9, 1.5, 0.25],
+                'baseOrientation': [0, 0, 0],
+                'globalScaling': 1.0,# 8.0
+                'mass': 0.01,
+                'rgbaColor': (0.9, 0.75, 0.65, 1),
+            },
         },
         'goal_pos': [[-2.5, 2.0, 0.5]],
     },
@@ -41,9 +42,20 @@ ROBOT_INFO ={
         'file_name':'piper_description/urdf/piper_description.urdf',
         'ee_joint_name': 'joint6', # arm end effector joint
         'ee_link_name': 'gripper_base',
-        'global_scaling': 10.0,
+        'global_scaling': 1.0,# 10
         'use_fixed_base': True,
-        'base_pos': np.array([5.0, 1.5, 0]),
+        'base_pos': np.array([.50, .15, 0]),
+        # 'base_pos': np.array([5.0, 1.5, 0]),
+        'rest_arm_qpos': None
+    },
+    'piper_gripper': {
+        'file_name': 'piper_description/urdf/piper_gripper.urdf',
+        'ee_joint_name': 'joint6', # arm end effector joint
+        'ee_link_name': 'gripper_base',
+        'global_scaling': 1.0,
+        'use_fixed_base': True,
+        'base_pos': None,
+        # 'base_pos': np.array([5.0, 1.5, 0]),
         'rest_arm_qpos': None
     },
 }

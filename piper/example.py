@@ -1,44 +1,28 @@
-import matplotlib.pyplot as plt
 import os
+import numpy as np
+import matplotlib.pyplot as plt
 from matplotlib import interactive
 from __init__ import __file__ as piper_path
 
 interactive(True)
-import numpy as np
 
 import gym
+import pybullet
 
 from args import get_args_parser
 from common import init_wandb, init_writer
+from bullet_manipulator import convert_all
+import util
+
 
 def play(env, num_episodes=500):
 
-    # logdir = os.path.join(piper_path, 'logs')
     vidwriter = init_writer('logs', args)
-    # calculate the target pose
+    env.reset()
     graspset, contacts = env.grasp_pose_from_antipodal()
-    print('Grasp set:', graspset)
-
-    for episode in range(num_episodes):
-
-        obs = env.reset()
-
-
-        if args.cam_resolution > 0:
-            img = env.render(mode='rgb_array', width=args.cam_resolution,
-                             height=args.cam_resolution)
-            if vidwriter is not None:
-                vidwriter.write(img[..., ::-1])
-
-        step = 0
-        ctrl_freq = args.sim_freq / args.sim_steps_per_action
-        robot = env.robot
-
-        gif_frames = []
-        rwds = []
-        print(f'# {args.env}:')
-
-        env.sim.stepSimulation()
+    for g in graspset:
+        print('g', g)
+        re = env._simulate_grasp(g)
 
 
 def main(args):    
@@ -57,6 +41,17 @@ def main(args):
     play(env, num_episodes=5)
 
 
+
+def _set_action(tf): # set 
+    finger_dist= [[0.7]]
+    gripper_pos, gripper_quat = util.position_and_quaternion_from_tf(tf, convention='pybullet')
+    gripper_pos = np.array(gripper_pos)[np.newaxis]
+    gripper_orn = np.array(pybullet.getEulerFromQuaternion(gripper_quat))[np.newaxis]
+    print('gripper_pos', gripper_pos)   
+    print('gripper_orn', gripper_orn) 
+    gripper_orn = convert_all(gripper_orn, 'theta_to_sin_cos')
+    return np.concatenate([gripper_pos, gripper_orn, finger_dist], axis=-1)
+  
 
 
 if __name__ == '__main__':

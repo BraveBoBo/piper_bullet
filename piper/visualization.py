@@ -136,7 +136,7 @@ def show_grasp_set(objects: list, gs, gripper=None, n=None, score_color_func=Non
     show_geometries(objects)
 
 
-def create_plane(size=(0.5, 0.5), centered=True, h=0.001):
+def create_plane(size=(2, 2), centered=True, h=0.001):
     """
     Create a plane for visualisation purposes.
 
@@ -168,3 +168,4 @@ def create_frame(size=0.01, pose=None):
     if pose is not None:
         frame.transform(pose)
     return frame
+

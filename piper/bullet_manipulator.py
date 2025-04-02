@@ -76,6 +76,7 @@ class BulletManipulator:
 
     def __init__(self, sim, robot_desc_file, ee_joint_name, ee_link_name,
                  control_mode, base_pos, base_quat, global_scaling,
+                 robot_mode = 'robot', # robot or gripper
                  rest_arm_qpos=None,
                  left_ee_joint_name=None, left_ee_link_name=None,
                  left_fing_link_prefix=None, left_joint_suffix=None,

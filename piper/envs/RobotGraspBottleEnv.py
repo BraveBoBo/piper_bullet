@@ -22,7 +22,10 @@ from piper.camera_utils import cameraConfig
 from piper.gripper import PiperGripper
 from piper.grasp import Grasp
 from piper.sampling import AntipodalGraspSampler
-from piper import util
+from piper.util import position_and_quaternion_from_tf
+from piper.visualization import show_grasp_set ,create_plane
+from piper.sampling import as_trimesh
+
 # --------------------
 # Environment for rigid body grasping
 # --------------------
@@ -48,12 +51,13 @@ class RigidGrasping(gym.Env):
     ROLLING_FRICTION = 0.0001
     MIN_OBJ_MASS = 0.05  # small masses will be replaced by this (could tune a bit more, in combo with solver)
     JOINT_TYPES = ["REVOLUTE", "PRISMATIC", "SPHERICAL", "PLANAR", "FIXED"]
-
+    antipodgraspsample_k = 10
     def __init__(self, args):
         self.args = args
         self.cam_on = args.cam_resolution > 0
         self.sim = bclient.BulletClient(
             connection_mode=pybullet.GUI if args.viz else pybullet.DIRECT)
+        self.antipodgraspsample_k = 100
         if self.args.viz:  # no rendering during load
             self.sim.configureDebugVisualizer(pybullet.COV_ENABLE_RENDERING, 0)
             
@@ -68,14 +72,17 @@ class RigidGrasping(gym.Env):
         # load the floor
         self.load_floor(self.sim, debug=args.debug)
 
-
         # load the robot
-        self.load_robot(self.sim, args, debug=args.debug)
+        # self.load_robot(self.sim, args, debug=args.debug)
 
+        # use the robot gripper
         # load the gripper and the grasp and the sample the grasp
-        gripper = PiperGripper()
-        grasp = Grasp()
-        sample = AntipodalGraspSampler()
+        # self.load_gripper(self.sim, args, debug=args.debug)
+
+
+        self.gripper = PiperGripper()
+        self.grasp = Grasp()
+        self.sample = AntipodalGraspSampler()
 
 
 
@@ -108,7 +115,12 @@ class RigidGrasping(gym.Env):
             np.ones(self.num_anchors * act_sz))
         if self.args.debug:
             print('Wrapped as DeformEnvRobot with act', self.action_space)
-
+    
+    @staticmethod
+    def unscale_pos(act, unscaled):
+        if unscaled:
+            return act
+        return act * RigidGrasping.WORKSPACE_BOX_SIZE
 
     def seed(self, seed):
         np.random.seed(seed)
@@ -204,12 +216,12 @@ class RigidGrasping(gym.Env):
     
     def load_floor(self,sim, plane_texture=None, debug=False):
         sim.setAdditionalSearchPath(pybullet_data.getDataPath())
-        floor_id = sim.loadURDF('plane.urdf')
+        self.floor_id = sim.loadURDF('plane.urdf')
         if plane_texture is not None:
             if debug: print('texture file', plane_texture)
             texture_id = sim.loadTexture(plane_texture)
             sim.changeVisualShape(
-                floor_id, -1, rgbaColor=[1,1,1,1], textureUniqueId=texture_id, )
+                self.floor_id, -1, rgbaColor=[1,1,1,1], textureUniqueId=texture_id, )
         # assert(floor_id == 1)  # camera assumes floor/ground is loaded second, AFTER THE DEFORMABLE
         return sim
     
@@ -238,7 +250,9 @@ class RigidGrasping(gym.Env):
         self.load_floor(self.sim, plane_texture=plane_texture_path,
                         debug=self.args.debug)
         
-        self.load_robot(self.sim, self.args, debug=self.args.debug)
+        # self.load_robot(self.sim, self.args, debug=self.args.debug)
+        
+        # self.load_gripper(self.sim, self.args, debug=self.args.debug)
         
         # load the gripper and the grasp and the sample the grasp
         self.gripper = PiperGripper()
@@ -268,27 +282,84 @@ class RigidGrasping(gym.Env):
         return self.antipodgraspsample
 
 
-    def grasp_pose_from_antipodal(self,n=1000):
-        return self.antipodgraspsample.sample(n)
+    def grasp_pose_from_antipodal(self,with_plane=True,debug=True):
+        graspset, contacts = self.antipodgraspsample.sample(self.antipodgraspsample_k)
+        additional_objects = []
+        if with_plane:
+            plane = create_plane(size=(1.5,1.5), centered=False)
+            additional_objects.append(plane)
+            # plane = as_trimesh(plane)
+        collision = self.antipodgraspsample.check_collisions(graspset,additional_objects=additional_objects)
+        graspset = graspset[~collision]
+        contacts = contacts[~collision]
+        if debug:
+            # visualize the grasps
+            show_grasp_set([self.antipodgraspsample.mesh], graspset, gripper=self.gripper, use_width=False,
+                                      score_color_func=lambda s: [s, 1-s, 0], with_plane=True)
+
+        return graspset, contacts
+
+    def load_gripper(self, sim, args=None, position=None, orientation=None, fixed_base=False, friction=None, debug=False):
+       
+        data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
+        sim.setAdditionalSearchPath(data_path)
+        robot_info = ROBOT_INFO.get(f'piper_gripper', None)
+        assert(robot_info is not None)  # make sure robot_info is ok
+        robot_path = os.path.join(data_path, 'robots',
+                                  robot_info['file_name'])
+        
+        if position is None:
+            position = [0, 0, 0]
+        if orientation is None:
+            orientation = [0, 0, 0, 1]
+
+        body_id = self.sim.loadURDF(robot_path, basePosition=position, baseOrientation=orientation,
+                                   useFixedBase=int(fixed_base))
+        
+        num_joints = self.sim.getNumJoints(body_id)
+        joint_infos = {}
+        for joint_idx in range(num_joints):
+            if friction is not None:
+                self.sim.changeDynamics(
+                    body_id,
+                    joint_idx,
+                    lateralFriction=friction,
+                    spinningFriction=self.SPINNING_FRICTION,
+                    rollingFriction=self.ROLLING_FRICTION,
+                    frictionAnchor=False  # todo: not sure whether we really want the friction anchor
+                    # documentation says:
+                    # enable or disable a friction anchor: friction drift correction
+                    # (disabled by default, unless set in the URDF contact section)
+                )
+            joint_info = self._get_joint_info(body_id, joint_idx)
+            joint_infos[joint_info['link_name']] = joint_info
+
+        return body_id, joint_infos
 
 
-
-    def load_robot(self, sim,args,debug=False):
+    def load_robot(self, sim,
+                   robot_mode="piper",
+                     position=None,
+                     orientation=None,
+                    args= None,
+                   debug=False):
         """Load a robot from file, create visual and collision shapes."""
         data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
         sim.setAdditionalSearchPath(data_path)
-        robot_info = ROBOT_INFO.get(f'piper', None)
+        robot_info = ROBOT_INFO.get(f'piper', None) if robot_mode == 'piper' else ROBOT_INFO.get(f'piper_gripper', None)
         assert(robot_info is not None)  # make sure robot_info is ok
         robot_path = os.path.join(data_path, 'robots',
                                   robot_info['file_name'])
         if debug:
             print('Loading robot from', robot_path)
         self.robot = BulletManipulator(
-            sim, robot_path, control_mode='velocity',
+            sim, robot_path,
+            robot_mode=robot_mode,
+            control_mode='velocity',
             ee_joint_name=robot_info['ee_joint_name'],
             ee_link_name=robot_info['ee_link_name'],
-            base_pos=robot_info['base_pos'],
-            base_quat=pybullet.getQuaternionFromEuler([0, 0, np.pi]),
+            base_pos=robot_info['base_pos'] if robot_mode == 'piper' else position,
+            base_quat=pybullet.getQuaternionFromEuler([0, 0, np.pi]) if robot_mode == 'piper' else orientation,
             global_scaling=robot_info['global_scaling'],
             use_fixed_base=robot_info['use_fixed_base'],
             rest_arm_qpos=robot_info['rest_arm_qpos'],
@@ -357,6 +428,27 @@ class RigidGrasping(gym.Env):
         img = rgba_px[:, :, 0:3]
         return img
     
+
+    def _get_joint_info(self, body_id, joint_id):
+        """returns a dict with some joint info"""
+        # todo: make joint_info a class so we don't have to memorise the keys
+        info = self.sim.getJointInfo(body_id, joint_id)
+        joint_info = {
+            'id': info[0],
+            'link_name': info[12].decode("utf-8"),
+            'joint_name': info[1].decode("utf-8"),
+            'type': self.JOINT_TYPES[info[2]],
+            'friction': info[7],
+            'lower_limit': info[8],
+            'upper limit': info[9],
+            'max_force': info[10],
+            'max_velocity': info[11],
+            'joint_axis': info[13],
+            'parent_pos': info[14],
+            'parent_orn': info[15]
+        }
+        return joint_info
+    
     def _are_in_collision(self, body_id_1, body_id_2):
         """
         checks if two bodies are in collision with each other.
@@ -383,6 +475,117 @@ class RigidGrasping(gym.Env):
             print(f'distances are: {distances}')
 
         return n_colliding_points > 0
+
+    def step(self, action, unscaled=False):
+        if self.args.debug:
+            print('action', action)
+        if not unscaled:
+            assert self.action_space.contains(action)
+            assert ((np.abs(action) <= 1.0).all()), 'action must be in [-1, 1]'
+        action = action.reshape(self.num_anchors, -1)
+
+        # Step through physics simulation.
+        for sim_step in range(self.args.sim_steps_per_action):
+            self.do_action(action, unscaled)
+            self.sim.stepSimulation()
+
+        return None
+    
+
+    def do_action(self, action, unscaled=False):
+        # Note: action is in [-1,1], so we unscale pos (ori is sin,cos so ok).
+        action = action.reshape(self.num_anchors, -1)
+        ee_pos, ee_ori, _, _ = self.robot.get_ee_pos_ori_vel()
+        tgt_pos = RigidGrasping.unscale_pos(action[0, :3], unscaled)
+        tgt_ee_ori = ee_ori if action.shape[-1] == 3 else action[0, 3:-1]
+        tgt_kwargs = {'ee_pos': tgt_pos, 'ee_ori': tgt_ee_ori,
+                      'fing_dist': RigidGrasping.FING_DIST}
+
+        tgt_qpos = self.robot.ee_pos_to_qpos(**tgt_kwargs)
+        n_slack = 1  # use > 1 if robot has trouble reaching the pose
+        sub_i = 0
+        max_diff = 0.02
+        diff = self.robot.get_qpos() - tgt_qpos
+        while (np.abs(diff) > max_diff).any():
+            self.robot.move_to_qpos(
+                tgt_qpos, mode=pybullet.POSITION_CONTROL, kp=0.1, kd=1.0)
+            self.sim.stepSimulation()
+            diff = self.robot.get_qpos() - tgt_qpos
+            sub_i += 1
+            if sub_i >= n_slack:
+                diff = np.zeros_like(diff)  # set while loop to done
+
+
+    def _simulate_grasp(self, g,debug=True):
+        # Step through physics simulation.
+        print('************** physics engine parameters **************')
+        print(self.sim.getPhysicsEngineParameters())
+        print('*******************************************************')
+
+        ########################################
+        # PHASE 0: PLACING GRIPPER IN GRASP POSE
+        # we have TCP grasp representation, hence need to transform gripper to TCP-oriented pose as well
+
+        tf = np.matmul(g.pose, self.gripper.tf_base_to_TCP)
+        grasp_pos, grasp_quat = position_and_quaternion_from_tf(g.pose, convention='pybullet')
+        gripper_pos, gripper_quat = position_and_quaternion_from_tf(tf, convention='pybullet')
+        print('grasp_pos', grasp_pos)
+        print('grasp_quat', grasp_quat)
+        # load a dummy robot which we can move everywhere and connect the gripper to it
+        self.piper_gripper,gripper_joints = self.load_gripper(self.sim, args=self.args,
+            position=gripper_pos, orientation=gripper_quat,
+            fixed_base=False, friction=None, debug=debug)
+            
+        
+
+
+        ###################################
+        # PHASE:  OPEN THE GRIPPER
+        # open the gripper  
+        # 
+
+
+
+        ###################################
+        # PHASE 1: CHECK GRIPPER COLLISIONS
+        # checking collisions against ground plane and target object
+        if self._are_in_collision(self.piper_gripper, self.floor_id):
+            if debug:
+                print('gripper and plane are in collision')
+            return None
+        
+        if self._are_in_collision(self.piper_gripper, self.rigid_ids[0]):
+            if debug:
+                print('gripper and target object are in collision')
+            return None
+
+        if debug:
+            print('COLLISION CHECKS PASSED... press enter to continue')
+
+        ##############################
+        # PHASE 2: CLOSING FINGER TIPS
+        # now we need to link the finger tips together, so they mimic their movement
+        # this variant is by https://github.com/lzylucy/graspGripper
+        # using link 1 as master with velocity control, and all other links use position control to follow 1
+        # self._p.setJointMotorControl2(self._body_ids['gripper'], 1, p.VELOCITY_CONTROL, targetVelocity=1, force=50)
+        # seconds = 1.0
+        # for i in range(int(seconds/self.dt)):
+        #     self._control_follower_joints()
+        #     self._p.stepSimulation()
+
+        #     if self.verbose:
+        #         time.sleep(self.TIME_SLEEP)
+
+        #     # checking contact
+        #     if self._both_fingers_touch_object(
+        #             gripper_joints['robotiq_2f_85_left_pad']['id'],
+        #             gripper_joints['robotiq_2f_85_right_pad']['id']):
+        #         if self.verbose:
+        #             print('CONTACT ESTABLISHED')
+        #             print('proceeding to hold grasp for 0.25 seconds')
+        #         break
+        
+
 
 
 def reset_bullet(args, sim, plane_texture=None, debug=False):
@@ -428,6 +631,10 @@ def load_o3d_mesh(args,tr=None,texture_fn=None,debug=False):
             
         mesh.transform(tr)
 
+        #scale the mesh
+        mesh.scale(kwargs['globalScaling'], center=mesh.get_center())
+
+        # set the color of the mesh
         if texture_fn is not None:
             mesh.textures = [o3d.io.read_image(texture_fn)]
 
