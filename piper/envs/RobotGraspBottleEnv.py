@@ -16,7 +16,7 @@ import pybullet
 import pybullet_utils.bullet_client as bclient
 import pybullet_data
 
-from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO
+from piper.constant import SCENE_INFO,scene_name,ROBOT_INFO,SOLVER_STEPS,DT
 from piper.bullet_manipulator import BulletManipulator
 from piper.camera_utils import cameraConfig
 from piper.gripper import PiperGripper
@@ -25,6 +25,7 @@ from piper.sampling import AntipodalGraspSampler
 from piper.util import position_and_quaternion_from_tf
 from piper.visualization import show_grasp_set ,create_plane
 from piper.sampling import as_trimesh
+from piper.common import init_wandb, init_writer
 
 # --------------------
 # Environment for rigid body grasping
@@ -43,7 +44,7 @@ class RigidGrasping(gym.Env):
     ORI_SIZE = 3 * 2  # 3D position + sin,cos for 3 Euler angles
     FING_DIST = 0.01  # default finger distance
 
-    SOLVER_STEPS = 100  # a bit more than default helps in contact-rich tasks
+    # SOLVER_STEPS = 100  # a bit more than default helps in contact-rich tasks
     dt = 1. / 240.  # this is the default and should not be changed light-heartedly
     TIME_SLEEP = dt * 3  # for visualization
     SPINNING_FRICTION = 0.1
@@ -51,7 +52,7 @@ class RigidGrasping(gym.Env):
     ROLLING_FRICTION = 0.0001
     MIN_OBJ_MASS = 0.05  # small masses will be replaced by this (could tune a bit more, in combo with solver)
     JOINT_TYPES = ["REVOLUTE", "PRISMATIC", "SPHERICAL", "PLANAR", "FIXED"]
-    antipodgraspsample_k = 10
+    antipodgraspsample_k = 1000
     def __init__(self, args):
         self.args = args
         self.cam_on = args.cam_resolution > 0
@@ -65,6 +66,10 @@ class RigidGrasping(gym.Env):
 
         self.num_anchors = 1  
 
+        self.friction_coeff = 0.24
+        self.SPINNING_FRICTION = 0.003
+        self.ROLLING_FRICTION = 0.0001
+    
         # load the scene
         res = self.load_objects(self.sim, args, args.debug)
         self.rigid_ids ,self.goal_poses = res
@@ -115,7 +120,13 @@ class RigidGrasping(gym.Env):
             np.ones(self.num_anchors * act_sz))
         if self.args.debug:
             print('Wrapped as DeformEnvRobot with act', self.action_space)
-    
+
+
+        # task-specific parameters
+        self.LIFTING_HEIGHT = 0.05  # height for lifting the object
+        self.deta_distance = -0.2  # distance to move the gripper along its approach direction
+
+
     @staticmethod
     def unscale_pos(act, unscaled):
         if unscaled:
@@ -191,10 +202,13 @@ class RigidGrasping(gym.Env):
         else:
             print('Unknown file extension', obj_file_name)
             assert(False), 'load_rigid_object supports only obj and URDF files'
-        sim.changeDynamics(rigid_id, -1, mass, lateralFriction=1.0,
-                        spinningFriction=1.0, rollingFriction=1.0,
-                        restitution=0.0)
+
+        # sim.changeDynamics(rigid_id, -1, mass, lateralFriction=1.0,
+        sim.changeDynamics(rigid_id, -1, lateralFriction=self.friction_coeff,
+                               spinningFriction=self.SPINNING_FRICTION, rollingFriction=self.ROLLING_FRICTION,
+                             mass=mass)
         n_jt = sim.getNumJoints(rigid_id)
+
 
         if texture_file is not None:
             texture_id = sim.loadTexture(texture_file)
@@ -258,7 +272,7 @@ class RigidGrasping(gym.Env):
         self.grasp = Grasp()
         self.antipodgraspsample = AntipodalGraspSampler()
         self.antipodgraspsample = self.setup_grasp_sampler()
-
+        self.deta_distance = -0.5*self.gripper.finger_length
 
         self.sim.stepSimulation()  # step once to get initial state
 
@@ -297,14 +311,14 @@ class RigidGrasping(gym.Env):
 
         return graspset, contacts
 
-    def load_gripper(self, sim, args=None, position=None, orientation=None, fixed_base=False, friction=None, debug=False):
+    def load_gripper(self, sim,xyz=False, args=None, position=None, orientation=None, fixed_base=False, friction=None, debug=False):
        
         data_path = os.path.join(os.path.split(__file__)[0], '..', 'data')
         sim.setAdditionalSearchPath(data_path)
         robot_info = ROBOT_INFO.get(f'piper_gripper', None)
         assert(robot_info is not None)  # make sure robot_info is ok
         robot_path = os.path.join(data_path, 'robots',
-                                  robot_info['file_name'])
+                                  robot_info['file_name'] if not xyz else robot_info['xyz_robot_name'])
         
         if position is None:
             position = [0, 0, 0]
@@ -513,22 +527,37 @@ class RigidGrasping(gym.Env):
         # we have TCP grasp representation, hence need to transform gripper to TCP-oriented pose as well
 
         tf = np.matmul(g.pose, self.gripper.tf_base_to_TCP)
-        grasp_pos, grasp_quat = position_and_quaternion_from_tf(g.pose, convention='pybullet')
+        # grasp_pos, grasp_quat = position_and_quaternion_from_tf(g.pose, convention='pybullet')
         gripper_pos, gripper_quat = position_and_quaternion_from_tf(tf, convention='pybullet')
-        print('grasp_pos', grasp_pos)
-        print('grasp_quat', grasp_quat)
-        # load a dummy robot which we can move everywhere and connect the gripper to it
-        self.piper_gripper,self.gripper_joints = self.load_gripper(self.sim, args=self.args,
+
+        # load a dummy robot 
+        self.xyz_robot,self.xyz_robot_joints = self.load_gripper(self.sim,xyz=True, args=self.args,
             position=gripper_pos, orientation=gripper_quat,
+            fixed_base=True, friction=None, debug=debug)
+        # load the gripper
+        self.piper_gripper,self.gripper_joints = self.load_gripper(self.sim, args=self.args,
+            position=gripper_pos , orientation=gripper_quat,
             fixed_base=False, friction=None, debug=debug)
-        
+
+        self.sim.createConstraint(
+            self.xyz_robot, self.xyz_robot_joints['end_effector_link']['id'],
+            self.piper_gripper, -1,
+            jointType=pybullet.JOINT_FIXED, jointAxis=[0, 0, 0],
+            parentFramePosition=[0, 0, 0], childFramePosition=[0, 0, 0],
+            parentFrameOrientation=[0, 0, 0, 1], childFrameOrientation=[0, 0, 0, 1]
+        )
         ###################################
         # PHASE:  OPEN THE GRIPPER
-        # open the gripper  
-        if self._check_gripper_closed():
-            distance = self.open_gripper()
-            print("左右手指之间的距离:", distance)
+        # open the gripper
+        
 
+        self.open_gripper()
+        for _ in range(50):  
+            self.sim.stepSimulation()
+            time.sleep(self.dt)
+
+        # self.sim.resetBasePositionAndOrientation(self.piper_gripper, gripper_pos, gripper_quat)
+        
 
         ###################################
         # PHASE 1: CHECK GRIPPER COLLISIONS
@@ -543,38 +572,108 @@ class RigidGrasping(gym.Env):
                 print('gripper and target object are in collision')
             return None
 
-        if debug:
-            print('COLLISION CHECKS PASSED... press enter to continue')
 
         ##############################
         # PHASE 2: CLOSING FINGER TIPS
         # now we need to link the finger tips together, so they mimic their movement
-        # this variant is by https://github.com/lzylucy/graspGripper
-        # using link 1 as master with velocity control, and all other links use position control to follow 1
+        seconds = 1.0
+        self.control_gripper(open=False)
+        for i in range(int(seconds/self.dt)):
+            self.sim.stepSimulation()
+            if debug:
+                time.sleep(self.TIME_SLEEP)
 
-        ##############################
-        # PHASE 2: CLOSING FINGER TIPS
-        # now we need to link the finger tips together, so they mimic their movement
-        # this variant is by https://github.com/lzylucy/graspGripper
-        # using link 1 as master with velocity control, and all other links use position control to follow 1
-        # self._p.setJointMotorControl2(self._body_ids['gripper'], 1, p.VELOCITY_CONTROL, targetVelocity=1, force=50)
-        # seconds = 1.0
-        # for i in range(int(seconds/self.dt)):
-        #     self._control_follower_joints()
-        #     self._p.stepSimulation()
+            # checking contact
+            if self._both_fingers_touch_object(
+                self.gripper_joints['left_finger']['id'],
+                self.gripper_joints['right_finger']['id']):
+                if debug:
+                    print('CONTACT ESTABLISHED')
+                    print('proceeding to hold grasp for 0.25 seconds')
+                break
 
-        #     if self.verbose:
-        #         time.sleep(self.TIME_SLEEP)
+        self.control_gripper(open=False)
+        for i in range(int(0.25/self.dt)):
+            self.sim.stepSimulation()
 
-        #     # checking contact
-        #     if self._both_fingers_touch_object(
-        #             gripper_joints['robotiq_2f_85_left_pad']['id'],
-        #             gripper_joints['robotiq_2f_85_right_pad']['id']):
-        #         if self.verbose:
-        #             print('CONTACT ESTABLISHED')
-        #             print('proceeding to hold grasp for 0.25 seconds')
-        #         break
+        if not self._both_fingers_touch_object(
+                self.gripper_joints['left_finger']['id'],
+                self.gripper_joints['right_finger']['id']):
+            if self.args.viz:
+                print('gripper does not touch object, grasp FAILED')
+            return None
         
+        #########################
+        # PHASE 3: LIFTING OBJECT
+        if self.args.viz:
+            print('OBJECT GRASPED... press enter to lift it')
+        input()
+
+        # ok so our dummy robot can be controlled with prismatic (linear) joints in xyz
+        # however, the base of the dummy robot has some arbitrary pose in space, so it's not just controlling z
+        target_movement = [0, 0, self.LIFTING_HEIGHT]  # x, y, z
+
+        pos, *_ = self.sim.getLinkState(
+            self.xyz_robot,
+            self.xyz_robot_joints['end_effector_link']['id']
+        )
+        target_position = np.array(target_movement) + np.array(pos)
+
+        target_joint_pos = self.sim.calculateInverseKinematics(
+            self.xyz_robot,
+            self.xyz_robot_joints['end_effector_link']['id'],
+            list(target_position)
+        )
+
+        if self.args.viz:
+            print('target position:', list(target_position))
+            print('target joint pos:', target_joint_pos)
+
+        # setup position control with target joint values
+        self.sim.setJointMotorControlArray(
+            self.xyz_robot,
+            jointIndices=range(len(self.xyz_robot_joints)),
+            controlMode=pybullet.POSITION_CONTROL,
+            targetPositions=target_joint_pos,
+            targetVelocities=[0.01 for _ in self.xyz_robot_joints.keys()],
+            forces=[np.minimum(item['max_force'], 80) for _, item in self.xyz_robot_joints.items()]
+        )
+
+        n_steps = 0
+        timeout = 1.5  # seconds
+        max_steps = timeout / self.dt
+        while (np.sum(np.abs(target_position - np.array(pos))) > 0.01) and (n_steps < max_steps):
+            self.control_gripper(open=False)
+            self.sim.stepSimulation()
+            pos, *_ = self.sim.getLinkState(
+                self.xyz_robot,
+                self.xyz_robot_joints['end_effector_link']['id']
+            )
+            n_steps += 1
+
+            if self.args.viz:
+                time.sleep(self.TIME_SLEEP)
+                print('***')
+                print(f'step {n_steps} / {max_steps}')
+                print(pos[2], 'current z of robot end-effector link')
+                print(target_position[2], 'target z pos of that link')
+                print(f'abs difference of z: {np.abs(target_position[2] - pos[2])}; ')
+                print(f'abs diff sum total: {np.sum(np.abs(target_position - np.array(pos)))}')
+
+
+        if self.args.viz:
+            print(f'LIFTING done, required {n_steps*self.dt} of max {max_steps*self.dt} seconds')
+        # lifting finished, check if object still attached
+        if not self._both_fingers_touch_object(
+                self.gripper_joints['left_finger']['id'],
+                self.gripper_joints['right_finger']['id']):
+            if self.args.viz:
+                print('gripper does not touch object anymore, grasp FAILED')
+            return -100
+        if self.args.viz:
+            print('object grasped and lifted successfully')
+
+        return 100
 
 
     def _are_in_contact(self, body_id_1, link_id_1, body_id_2, link_id_2):
@@ -599,47 +698,98 @@ class RigidGrasping(gym.Env):
         return contact_2
     
     def _check_gripper_closed(self):
-        """
-        通过计算左右手指之间的距离，检查夹爪是否闭合。
-        Returns:
-            bool: 如果夹爪闭合（左右手指距离小于阈值），返回 True，否则返回 False。
-        """
         distance = self._get_finger_distance()
         print("左右手指之间的距离:", distance)
-        
-        # 定义一个阈值，当左右手指之间的距离小于此阈值时，认为夹爪已闭合
-        # 阈值根据具体夹爪的尺寸设定，这里示例设为 0.01 米
         closure_distance_threshold = 0.03
-        
         return distance < closure_distance_threshold
 
     
     def _get_finger_distance(self):
 
-        # 获取左手指和右手指的链接状态，返回值第 0 个元素为链接在世界坐标系下的位置
         left_state = self.sim.getLinkState(self.piper_gripper, self.gripper_joints["left_finger"]['id'])
         right_state = self.sim.getLinkState(self.piper_gripper, self.gripper_joints["right_finger"]['id'])
         
         left_pos = np.array(left_state[0])
         right_pos = np.array(right_state[0])
-        
-        # 计算左右手指之间的欧几里得距离
         distance = np.linalg.norm(left_pos - right_pos)
         return distance
 
 
-    def open_gripper(self):
+    def control_gripper(self, open=True):
+        """Controls the gripper state and returns the current finger distance.
+
+        This function sends position control commands to the gripper's finger joints to either
+        open or close the gripper. It then returns the current distance between the fingers.
+
+        Args:
+            open (bool): If True, open the gripper; if False, close the gripper.
+
+        Returns:
+            float: The current distance between the gripper fingers.
+        """
+        if open:
+            # Open gripper: set left finger to its upper limit and right finger to its lower limit.
+            target_positions = [
+                self.gripper_joints['left_finger']['upper_limit'],
+                self.gripper_joints['right_finger']['lower_limit']
+            ]
+        else:
+            # Close gripper: set left finger to its lower limit and right finger to its upper limit.
+            target_positions = [
+                self.gripper_joints['left_finger']['lower_limit'],
+                self.gripper_joints['right_finger']['upper_limit']
+            ]
+
+        # Send position control commands to the left and right finger joints.
         self.sim.setJointMotorControlArray(
-            self.piper_gripper, \
-            [self.gripper_joints['left_finger']['id'],self.gripper_joints['right_finger']['id']], \
+            self.piper_gripper,
+            [self.gripper_joints['left_finger']['id'],
+            self.gripper_joints['right_finger']['id']],
             pybullet.POSITION_CONTROL,
-            [self.gripper_joints['left_finger']['upper_limit'], self.gripper_joints['right_finger']['lower_limit']],  # open gripper
-            positionGains=np.ones(2)
-        ) 
-        for _ in range(240):  # 大约模拟1秒（240Hz）
-            self.sim.stepSimulation()
-            time.sleep(1.0/240.0)
+            target_positions,
+            # positionGains=np.ones(2)
+        )
+
+        # Return the current distance between the fingers.
         return self._get_finger_distance()
+
+    def open_gripper(self):
+        """Opens the gripper by setting the finger joints to their open target positions.
+
+        This function sends position control commands to the gripper's finger joints
+        to open the gripper. It directly sets the left finger to its upper limit and
+        the right finger to its lower limit.
+        """
+        target_positions = [
+            self.gripper_joints['left_finger']['upper_limit'],
+            self.gripper_joints['right_finger']['lower_limit']
+        ]
+        self.sim.setJointMotorControlArray(
+            self.piper_gripper,
+            [self.gripper_joints['left_finger']['id'],
+            self.gripper_joints['right_finger']['id']],
+            pybullet.POSITION_CONTROL,
+            target_positions
+        )
+def delta_pose(quat, distance):
+    """
+    Moves the gripper along its approach direction (assumed to be its local z-axis)
+    by a specified distance.
+
+    Args:
+        gripper_id (int): The PyBullet body ID of the gripper.
+        distance (float): The distance to move along the approach direction (in meters).
+
+    Returns:
+        None
+    """      
+    # Convert quaternion to rotation matrix.
+    rot = np.array(pybullet.getMatrixFromQuaternion(quat)).reshape(3, 3)
+    # Extract the approach direction (here assumed to be the local z-axis).
+    approach_dir = rot[:, 2]  # Third column corresponds to z-axis
+    
+    # Compute new position by adding the displacement.
+    return distance * approach_dir
 
 
 def reset_bullet(args, sim, plane_texture=None, debug=False):
@@ -661,7 +811,9 @@ def reset_bullet(args, sim, plane_texture=None, debug=False):
             print('projectionMatrix', res[3])
     sim.resetSimulation(pybullet.RESET_USE_DEFORMABLE_WORLD)  # FEM deform sim
     sim.setGravity(0, 0, args.sim_gravity)
-    sim.setTimeStep(1.0/args.sim_freq)
+    # sim.setTimeStep(1.0/args.sim_freq)
+    sim.setPhysicsEngineParameter(fixedTimeStep=1/240, numSolverIterations=200)
+
     sim.setAdditionalSearchPath(pybullet_data.getDataPath())
     # sim.setRealTimeSimulation(1)
     return

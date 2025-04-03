@@ -151,7 +151,7 @@ class PiperGripper(ParallelJawGripper):
         self._tf_base_to_TCP = np.array([
             [0.0, 1.0, 0.0, 0.0],
             [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, -1.0, 0.14],  # in manual, TCP is at 0.171, which is with finger tips closed
+            [0.0, 0.0, -1.0, 0.13],  # in manual, TCP is at 0.171, which is with finger tips closed
             [0.0, 0.0, 0.0, 1.0] #
         ])
         # todo: if we actually make a package distribution, this might not work anymore 

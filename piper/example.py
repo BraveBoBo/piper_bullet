@@ -10,7 +10,7 @@ import gym
 # import pybullet
 
 from args import get_args_parser
-# from common import init_wandb, init_writer
+from common import init_wandb, init_writer
 # from bullet_manipulator import convert_all
 # import util
 

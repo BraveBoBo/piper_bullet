@@ -10,13 +10,14 @@ SCENE_INFO ={
             #     'mass': 0,
             #     'useTexture': True,
             # },
-            # 'ycb/004_sugar_box/google_16k/textured.obj': {
-            # 'ycb/009_gelatin_box/google_16k/textured.obj': {
-            'ycb/003_cracker_box/google_16k/textured.obj': {
-                'basePosition': [0.18, 0.17, 0.025],
+            # 'ycb/013_apple/google_16k/textured.obj': {
+            'ycb/004_sugar_box/google_16k/textured.obj': {
+            # 'ycb/005_tomato_soup_can/google_16k/textured.obj': {
+            # 'ycb/003_cracker_box/google_16k/textured.obj': {
+                'basePosition': [0.18, 0.17, 0.0],
                 'baseOrientation': [0, 0, 0],
                 'globalScaling': 1,
-                'mass': 0.01,
+                'mass': 0.1,
                 'rgbaColor': (0.9, 0.75, 0.65, 1),
             },
             # 'ycb/005_tomato_soup_can/google_16k/textured.obj': {
@@ -50,6 +51,7 @@ ROBOT_INFO ={
     },
     'piper_gripper': {
         'file_name': 'piper_description/urdf/piper_gripper.urdf',
+        "xyz_robot_name": "piper_description/urdf/xyz_robot.urdf",
         'ee_joint_name': 'joint6', # arm end effector joint
         'ee_link_name': 'gripper_base',
         'global_scaling': 1.0,
@@ -73,3 +75,5 @@ DEFAULT_CAM_PROJECTION = {
                          0.0, 0.0, -1.0000200271606445, -1.0,
                          0.0, 0.0, -0.02000020071864128, 0.0)
 }
+SOLVER_STEPS = 100.0
+DT = 1.0/240.0

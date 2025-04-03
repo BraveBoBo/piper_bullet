@@ -121,7 +121,7 @@ def get_args_parser():
                         help='RGB camera resolution in pixels (both with and '
                              'height). Use none to get only anchor poses.')
     parser.add_argument('--cam_viewmat', type=float, nargs=6,
-                        default=(1, -22, 260, 0, 0, 1),
+                        default=(1, 0, 90, 0, 0, 0.5),
                         help='Generate the view matrix for rendering camera'
                              '(not the debug camera). '
                              '[distance, pitch, yaw, posX, posY, posZ]')
